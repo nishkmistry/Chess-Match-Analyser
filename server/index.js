@@ -93,6 +93,9 @@ app.post('/api/matches/fetch', async (req, res) => {
   try {
     // Ultimate safeguard against weird Serverless String formats
     let payload = req.body;
+    if (Buffer.isBuffer(payload) || (payload && payload.type === 'Buffer' && Array.isArray(payload.data))) {
+      try { payload = JSON.parse(Buffer.from(payload.data || payload).toString('utf8')); } catch(e){}
+    }
     if (typeof payload === 'string') {
       try { payload = JSON.parse(payload); } catch(e){}
     }
