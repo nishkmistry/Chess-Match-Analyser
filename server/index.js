@@ -52,7 +52,7 @@ app.get('/api/matches', async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error("GET /api/matches error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
 
@@ -73,7 +73,7 @@ app.get('/api/matches/:id', async (req, res) => {
     res.json(rows[0]);
   } catch (error) {
     console.error("GET /api/matches/:id error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
 
@@ -91,7 +91,13 @@ app.delete('/api/matches/:id', async (req, res) => {
 
 app.post('/api/matches/fetch', async (req, res) => {
   try {
-    const { username } = fetchSchema.parse(req.body);
+    // Ultimate safeguard against weird Serverless String formats
+    let payload = req.body;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch(e){}
+    }
+    
+    const { username } = fetchSchema.parse(payload);
 
     const archivesRes = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`);
     if (!archivesRes.ok) {
@@ -177,10 +183,10 @@ app.post('/api/matches/fetch', async (req, res) => {
 
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: "Validation failed", details: error.errors });
+      return res.status(400).json({ error: "Validation failed", details: error.errors, debugBody: req.body });
     }
     console.error("POST /api/matches/fetch error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: "Internal server error", message: error.message });
   }
 });
 
