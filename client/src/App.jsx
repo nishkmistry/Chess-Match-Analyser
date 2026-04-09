@@ -9,7 +9,7 @@ import MatchTable from './components/MatchTable';
 import DashboardStats from './components/DashboardStats';
 import AnalysisBoard from './components/AnalysisBoard';
 
-const API_URL = 'http://localhost:5000/api/matches';
+const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
 
 function Dashboard({ matches, setMatches, loading, fetchMatches }) {
   const handleMatchesFetched = (newMatches) => {

@@ -5,7 +5,7 @@ import ChessDisplay from './ChessDisplay';
 import axios from 'axios';
 import { ArrowLeft, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api/matches';
+const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
 
 export default function AnalysisBoard() {
   const { matchId } = useParams();
