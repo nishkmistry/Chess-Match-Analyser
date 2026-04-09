@@ -6,14 +6,30 @@ const pool = require('./db');
 const app = express();
 app.use(cors());
 
-// Serverless platform compatibility: 
-// Vercel parses the body natively. If express.json() runs again, it wipes the body to {} 
-// because the stream was already consumed. This prevents the "Validation failed" bug.
+// Universal Serverless Body Parser Fix
 app.use((req, res, next) => {
+  // 1. Vercel Pre-parsed check
   if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
     return next();
   }
-  express.json()(req, res, next);
+  // 2. Standard Local express JSON parser
+  express.json()(req, res, (err) => {
+    if (err) return next(err);
+    
+    // 3. Netlify & AWS Serverless-Http Fallback
+    if (req.apiGateway && req.apiGateway.event && req.apiGateway.event.body) {
+      if (!req.body || Object.keys(req.body).length === 0) {
+        try {
+          let rawBody = req.apiGateway.event.body;
+          if (req.apiGateway.event.isBase64Encoded) {
+            rawBody = Buffer.from(rawBody, 'base64').toString('utf-8');
+          }
+          req.body = JSON.parse(rawBody);
+        } catch(e) {}
+      }
+    }
+    next();
+  });
 });
 app.use(express.urlencoded({ extended: true }));
 
