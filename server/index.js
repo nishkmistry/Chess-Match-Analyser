@@ -5,7 +5,17 @@ const pool = require('./db');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// Serverless platform compatibility: 
+// Vercel parses the body natively. If express.json() runs again, it wipes the body to {} 
+// because the stream was already consumed. This prevents the "Validation failed" bug.
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    return next();
+  }
+  express.json()(req, res, next);
+});
+app.use(express.urlencoded({ extended: true }));
 
 const fetchSchema = z.object({
   username: z.string().min(1, "Chess.com username is required")
