@@ -1,6 +1,13 @@
-# https://www.robotstxt.org/robotstxt.html
+# robots.txt — Chess Match Analyser
+# https://chess-match-analyser.netlify.app/
+# Reference: https://www.robotstxt.org/robotstxt.html
+
+# Allow all well-behaved crawlers full access
 User-agent: *
 Allow: /
 
-# Sitemaps
+# Block crawlers from dynamic analysis pages (content is user-specific, not useful for SEO)
+Disallow: /analysis/
+
+# Sitemap location
 Sitemap: https://chess-match-analyser.netlify.app/sitemap.xml
