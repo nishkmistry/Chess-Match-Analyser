@@ -2,5 +2,5 @@
 User-agent: *
 Allow: /
 
-# Sitemaps (uncomment and update if you have one)
-# Sitemap: https://yourdomain.com/sitemap.xml
+# Sitemaps
+Sitemap: https://chess-match-analyser.vercel.app/sitemap.xml
