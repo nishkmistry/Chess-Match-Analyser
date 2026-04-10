@@ -3,4 +3,4 @@ User-agent: *
 Allow: /
 
 # Sitemaps
-Sitemap: https://chess-match-analyser.vercel.app/sitemap.xml
+Sitemap: https://chess-match-analyser.netlify.app/sitemap.xml
