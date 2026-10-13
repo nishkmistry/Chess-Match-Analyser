@@ -20,5 +20,8 @@ CREATE TABLE IF NOT EXISTS chess_matches (
     game_hash TEXT UNIQUE NOT NULL,
     pgn TEXT,
     played_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    notes TEXT
+    notes TEXT,
+    player_color VARCHAR(5) CHECK (player_color IN ('white', 'black')),
+    tracked_username VARCHAR(100),
+    source VARCHAR(20) DEFAULT 'chess.com'
 );

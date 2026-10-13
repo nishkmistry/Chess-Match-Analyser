@@ -6,28 +6,9 @@ const pool = require('./db');
 const app = express();
 app.use(cors());
 
-// Universal Serverless Body Parser Fix
 app.use((req, res, next) => {
-  // 1. Vercel Pre-parsed check
-  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-    return next();
-  }
-  // 2. Standard Local express JSON parser
-  express.json()(req, res, (err) => {
+  express.json({ limit: '1mb' })(req, res, (err) => {
     if (err) return next(err);
-    
-    // 3. Netlify & AWS Serverless-Http Fallback
-    if (req.apiGateway && req.apiGateway.event && req.apiGateway.event.body) {
-      if (!req.body || Object.keys(req.body).length === 0) {
-        try {
-          let rawBody = req.apiGateway.event.body;
-          if (req.apiGateway.event.isBase64Encoded) {
-            rawBody = Buffer.from(rawBody, 'base64').toString('utf-8');
-          }
-          req.body = JSON.parse(rawBody);
-        } catch(e) {}
-      }
-    }
     next();
   });
 });
@@ -89,6 +70,24 @@ app.delete('/api/matches/:id', async (req, res) => {
   }
 });
 
+app.patch('/api/matches/:id/notes', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+    if (typeof notes !== 'string') return res.status(400).json({ error: 'notes must be a string' });
+
+    const { rows, rowCount } = await pool.query(
+      'UPDATE chess_matches SET notes = $1 WHERE match_id = $2 RETURNING notes',
+      [notes.slice(0, 1000), id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Match not found' });
+    res.json({ notes: rows[0].notes });
+  } catch (error) {
+    console.error("PATCH /api/matches/:id/notes error:", error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/matches/fetch', async (req, res) => {
   try {
     // Ultimate safeguard against weird Serverless String formats
@@ -101,6 +100,7 @@ app.post('/api/matches/fetch', async (req, res) => {
     }
     
     const { username } = fetchSchema.parse(payload);
+    const importLimit = Math.min(parseInt(req.query.limit || '20', 10), 100);
 
     const archivesRes = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`);
     if (!archivesRes.ok) {
@@ -153,9 +153,10 @@ app.post('/api/matches/fetch', async (req, res) => {
             
             const query = `
               INSERT INTO chess_matches 
-                (white_player_id, black_player_id, white_elo, black_elo, result, game_hash, pgn, played_at)
+                (white_player_id, black_player_id, white_elo, black_elo, result,
+                 game_hash, pgn, played_at, player_color, tracked_username, source)
               VALUES 
-                ($1, $2, $3, $4, $5, $6, $7, $8)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
               RETURNING *;
             `;
             const playedAt = game.end_time ? new Date(game.end_time * 1000).toISOString() : new Date().toISOString();
@@ -168,7 +169,10 @@ app.post('/api/matches/fetch', async (req, res) => {
                 result,
                 game.url,
                 game.pgn || null,
-                playedAt
+                playedAt,
+                isWhite ? 'white' : 'black',
+                username,
+                'chess.com'
             ];
             
             const { rows } = await pool.query(query, values);
@@ -177,9 +181,9 @@ app.post('/api/matches/fetch', async (req, res) => {
             newMatch.black_username = game.black.username;
             newMatches.push(newMatch);
 
-            if (newMatches.length >= 5) break;
+            if (newMatches.length >= importLimit) break;
         }
-        if (newMatches.length >= 5) break;
+        if (newMatches.length >= importLimit) break;
     }
 
     res.status(200).json({ fetched: newMatches.length, matches: newMatches });
@@ -190,6 +194,87 @@ app.post('/api/matches/fetch', async (req, res) => {
     }
     console.error("POST /api/matches/fetch error:", error);
     res.status(500).json({ error: "Internal server error", message: error.message });
+  }
+});
+
+app.post('/api/matches/fetch-lichess', async (req, res) => {
+  try {
+    let payload = req.body;
+    if (Buffer.isBuffer(payload) || (payload && payload.type === 'Buffer' && Array.isArray(payload.data))) {
+      try { payload = JSON.parse(Buffer.from(payload.data || payload).toString('utf8')); } catch(e){}
+    }
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch(e){}
+    }
+
+    const { username } = fetchSchema.parse(payload);
+    const importLimit = Math.min(parseInt(req.query.limit || '20', 10), 100);
+
+    const gamesRes = await fetch(
+      `https://lichess.org/api/games/user/${username}?max=${importLimit}&pgnInJson=true`,
+      { headers: { Accept: 'application/x-ndjson' } }
+    );
+    if (!gamesRes.ok) {
+      if (gamesRes.status === 404) return res.status(404).json({ error: 'User not found on Lichess' });
+      throw new Error(`Lichess API error: ${gamesRes.status}`);
+    }
+
+    const text = await gamesRes.text();
+    const games = text.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+
+    let newMatches = [];
+    for (const game of games) {
+      const gameUrl = `https://lichess.org/${game.id}`;
+      const exists = await pool.query('SELECT 1 FROM chess_matches WHERE game_hash = $1', [gameUrl]);
+      if (exists.rowCount > 0) continue;
+
+      const isWhite = game.players.white.user?.name?.toLowerCase() === username.toLowerCase();
+
+      let result = 'Draw';
+      const winner = game.winner;
+      if (winner === 'white' && isWhite) result = 'Win';
+      else if (winner === 'black' && !isWhite) result = 'Win';
+      else if (winner) result = 'Loss';
+
+      const whiteUser = game.players.white.user?.name || 'Anonymous';
+      const blackUser = game.players.black.user?.name || 'Anonymous';
+
+      await pool.query(
+        `INSERT INTO players (username) VALUES ($1), ($2) ON CONFLICT (username) DO NOTHING`,
+        [whiteUser, blackUser]
+      );
+      const playerIdsRes = await pool.query(
+        `SELECT player_id, username FROM players WHERE username IN ($1, $2)`,
+        [whiteUser, blackUser]
+      );
+      const pidMap = {};
+      playerIdsRes.rows.forEach(r => { pidMap[r.username] = r.player_id; });
+
+      const { rows } = await pool.query(`
+        INSERT INTO chess_matches
+          (white_player_id, black_player_id, white_elo, black_elo, result,
+           game_hash, pgn, played_at, player_color, tracked_username, source)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        RETURNING *`,
+        [pidMap[whiteUser], pidMap[blackUser],
+         game.players.white.rating || 0, game.players.black.rating || 0,
+         result, gameUrl, game.pgn || null,
+         game.lastMoveAt ? new Date(game.lastMoveAt).toISOString() : new Date().toISOString(),
+         isWhite ? 'white' : 'black', username, 'lichess']
+      );
+      const m = rows[0];
+      m.white_username = whiteUser;
+      m.black_username = blackUser;
+      newMatches.push(m);
+    }
+
+    res.status(200).json({ fetched: newMatches.length, matches: newMatches });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: error.errors });
+    }
+    console.error('POST /api/matches/fetch-lichess error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });
 
