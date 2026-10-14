@@ -30,13 +30,14 @@ function parseBody(body) {
   return payload;
 }
 
-// ---------- Grok (xAI) game reports ----------
+// ---------- AI game reports (Groq) ----------
 
-const XAI_API_URL = 'https://api.x.ai/v1/chat/completions';
-const XAI_MODEL = process.env.XAI_MODEL || 'grok-4.7';
-// grok-4.7 reasons at "high" effort by default, which is too slow for a serverless request.
-// Set XAI_REASONING_EFFORT to an empty string when using a non-reasoning model.
-const XAI_REASONING_EFFORT = process.env.XAI_REASONING_EFFORT ?? 'low';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+// Must be a model with strict structured-output support on Groq (gpt-oss or qwen3 models).
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+// gpt-oss reasons before answering; "low" keeps reports quick and well inside the free tier's
+// tokens-per-minute limit. Set GROQ_REASONING_EFFORT to an empty string for non-reasoning models.
+const GROQ_REASONING_EFFORT = process.env.GROQ_REASONING_EFFORT ?? 'low';
 
 const reportSchema = z.object({
   moves: z.array(z.string().min(1).max(12)).max(1000),
@@ -369,9 +370,9 @@ app.post('/api/matches/fetch-lichess', async (req, res) => {
 
 app.post('/api/matches/:id/report', async (req, res) => {
   try {
-    const apiKey = process.env.XAI_API_KEY;
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
-      return res.status(503).json({ error: 'AI reports are not configured. Set XAI_API_KEY on the server.' });
+      return res.status(503).json({ error: 'AI reports are not configured. Set GROQ_API_KEY on the server.' });
     }
 
     const { moves, evals } = reportSchema.parse(parseBody(req.body));
@@ -388,15 +389,15 @@ app.post('/api/matches/:id/report', async (req, res) => {
     `, [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Match not found' });
 
-    const grokRes = await fetch(XAI_API_URL, {
+    const aiRes = await fetch(GROQ_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: XAI_MODEL,
-        ...(XAI_REASONING_EFFORT && { reasoning_effort: XAI_REASONING_EFFORT }),
+        model: GROQ_MODEL,
+        ...(GROQ_REASONING_EFFORT && { reasoning_effort: GROQ_REASONING_EFFORT, include_reasoning: false }),
         messages: [
           { role: 'system', content: 'You are an experienced chess coach who explains games clearly and concretely to club players.' },
           { role: 'user', content: buildReportPrompt(rows[0], moves, evals) },
@@ -409,16 +410,19 @@ app.post('/api/matches/:id/report', async (req, res) => {
       signal: AbortSignal.timeout(25000),
     });
 
-    if (!grokRes.ok) {
-      const errData = await grokRes.json().catch(() => ({}));
+    if (!aiRes.ok) {
+      const errData = await aiRes.json().catch(() => ({}));
       const message = typeof errData.error === 'string' ? errData.error : errData.error?.message;
-      console.error('Grok API error:', grokRes.status, errData);
-      return res.status(502).json({ error: message || `Grok API returned ${grokRes.status}` });
+      console.error('Groq API error:', aiRes.status, errData);
+      if (aiRes.status === 429) {
+        return res.status(429).json({ error: 'Groq rate limit reached (free tier). Wait a minute and try again.' });
+      }
+      return res.status(502).json({ error: message || `Groq API returned ${aiRes.status}` });
     }
 
-    const data = await grokRes.json();
+    const data = await aiRes.json();
     const content = data.choices?.[0]?.message?.content;
-    if (!content) return res.status(502).json({ error: 'Empty response from Grok' });
+    if (!content) return res.status(502).json({ error: 'Empty response from Groq' });
 
     res.json(JSON.parse(content.replace(/```json|```/gi, '').trim()));
   } catch (error) {
@@ -426,7 +430,7 @@ app.post('/api/matches/:id/report', async (req, res) => {
       return res.status(400).json({ error: 'Validation failed', details: error.issues });
     }
     if (error.name === 'TimeoutError') {
-      return res.status(504).json({ error: 'Grok took too long to respond. Try again.' });
+      return res.status(504).json({ error: 'The AI took too long to respond. Try again.' });
     }
     console.error('POST /api/matches/:id/report error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
