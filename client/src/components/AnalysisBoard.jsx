@@ -178,7 +178,7 @@ Analyze this game and respond with ONLY a valid JSON object using exactly these 
 }`;
 
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -187,7 +187,7 @@ Analyze this game and respond with ONLY a valid JSON object using exactly these 
             generationConfig: {
               temperature: 0.3,
               maxOutputTokens: 1024,
-              responseMimeType: 'application/json',  // Gemini 2.5 Flash supports this — forces JSON output
+              responseMimeType: 'application/json',  // Gemini Flash supports this — forces JSON output
             }
           })
         }
