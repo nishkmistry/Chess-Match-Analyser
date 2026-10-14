@@ -177,28 +177,40 @@ Analyze this game and respond with ONLY a valid JSON object using exactly these 
   "summary": "One sentence describing how the game was ultimately decided"
 }`;
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 1024,
-              responseMimeType: 'application/json',  // Gemini Flash supports this — forces JSON output
-            }
-          })
+      const fetchGeminiReport = async (model) => {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.3,
+                maxOutputTokens: 1024,
+                responseMimeType: 'application/json',  // Gemini Flash supports this — forces JSON output
+              }
+            })
+          }
+        );
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData?.error?.message || `Gemini API (${model}) returned ${res.status}`);
         }
-      );
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `Gemini API returned ${res.status}`);
+        return await res.json();
+      };
+
+      let data;
+      try {
+        // Try primary model
+        data = await fetchGeminiReport('gemini-3.8-flash');
+      } catch (primaryErr) {
+        console.warn('Primary Gemini model (gemini-3.8-flash) failed, attempting fallback to gemini-2.5-flash:', primaryErr);
+        // Fallback to stable production model if high demand or error occurs
+        data = await fetchGeminiReport('gemini-2.5-flash');
       }
-
-      const data = await res.json();
       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!rawText) throw new Error('Empty response from Gemini');
 
