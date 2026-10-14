@@ -34,7 +34,9 @@ export default function DashboardStats({ matches }) {
     datasets: [
       {
         label: 'Your ELO',
-        data: last10Matches.map((m) => m.white_elo || 0),
+        data: last10Matches.map((m) =>
+          m.player_color === 'black' ? (m.black_elo || 0) : (m.white_elo || 0)
+        ),
         borderColor: 'rgb(59, 130, 246)',
         backgroundColor: 'rgba(59, 130, 246, 0.5)',
         tension: 0.3,

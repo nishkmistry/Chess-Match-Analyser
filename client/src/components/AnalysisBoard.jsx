@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
-import ChessDisplay from './ChessDisplay';
+import { Chessboard } from 'react-chessboard';
 import axios from 'axios';
-import { ArrowLeft, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Activity, RotateCw } from 'lucide-react';
 
 const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
 
@@ -15,6 +15,8 @@ export default function AnalysisBoard() {
   
   const [historyFens, setHistoryFens] = useState([]);
   const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
+  const [moveList, setMoveList] = useState([]);
+  const [boardOrientation, setBoardOrientation] = useState('white');
   
   const [evaluation, setEvaluation] = useState('0.00');
   const [bestMove, setBestMove] = useState('');
@@ -72,24 +74,32 @@ export default function AnalysisBoard() {
       try {
         const res = await axios.get(`${API_URL}/${matchId}`);
         setMatchData(res.data);
+        if (res.data?.player_color) {
+          setBoardOrientation(res.data.player_color);
+        }
         
         if (res.data.pgn) {
           try {
             const pgnGame = new Chess();
-            pgnGame.loadPgn(res.data.pgn);
-            
-            const fens = [pgnGame.fen()];
-            while (pgnGame.undo()) {
-                fens.unshift(pgnGame.fen());
+            pgnGame.loadPgn(res.data.pgn, { sloppy: true });
+            const moves = pgnGame.history({ verbose: true });
+            setMoveList(moves.map(m => m.san));
+
+            const replayGame = new Chess();
+            const fens = [replayGame.fen()];
+
+            for (const move of moves) {
+              replayGame.move(move);
+              fens.push(replayGame.fen());
             }
-            
+
             setHistoryFens(fens);
             setCurrentMoveIndex(0);
             analyzePosition(fens[0]);
 
           } catch (pgnError) {
-            console.error(pgnError);
-            setError('Failed to parse PGN.');
+            console.error('PGN parse error:', pgnError);
+            setError(`Could not parse game PGN. (${pgnError.message})`);
           }
         } else {
           setError('No valid PGN attached to this match.');
@@ -110,8 +120,17 @@ export default function AnalysisBoard() {
     analyzePosition(historyFens[index]);
   };
 
-  const nextMove = () => goToMove(currentMoveIndex + 1);
-  const prevMove = () => goToMove(currentMoveIndex - 1);
+  const nextMove = useCallback(() => goToMove(currentMoveIndex + 1), [currentMoveIndex, historyFens.length]);
+  const prevMove = useCallback(() => goToMove(currentMoveIndex - 1), [currentMoveIndex, historyFens.length]);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'ArrowRight') nextMove();
+      if (e.key === 'ArrowLeft') prevMove();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [nextMove, prevMove]);
   
   
   const getDisplayEval = () => {
@@ -176,8 +195,14 @@ export default function AnalysisBoard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-        <div>
-          <ChessDisplay fen={currentFen} />
+        <div className="flex flex-col items-center">
+          <div className="w-full max-w-[480px]">
+            <Chessboard
+              position={currentFen}
+              boardOrientation={boardOrientation}
+              arePiecesDraggable={false}
+            />
+          </div>
         </div>
         
         <div className="flex flex-col gap-6">
@@ -206,19 +231,59 @@ export default function AnalysisBoard() {
                  onClick={prevMove} 
                  disabled={currentMoveIndex <= 0}
                  className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition"
+                 title="Previous Move"
                >
                  <ChevronLeft size={24} />
+               </button>
+               <button
+                 onClick={() => setBoardOrientation(o => o === 'white' ? 'black' : 'white')}
+                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 transition"
+                 title="Flip board"
+               >
+                 <RotateCw size={24} />
                </button>
                <button 
                  onClick={nextMove} 
                  disabled={currentMoveIndex >= historyFens.length - 1}
                  className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition"
+                 title="Next Move"
                >
                  <ChevronRight size={24} />
                </button>
             </div>
             <div className="mt-4 text-sm text-slate-500">
                 Move {Math.floor((currentMoveIndex + 1) / 2)} of {Math.floor(historyFens.length / 2)}
+            </div>
+          </div>
+
+          <div className="bg-slate-50 rounded-lg border border-slate-100 p-4 max-h-64 overflow-y-auto">
+            <h3 className="font-semibold text-slate-700 mb-3 text-sm">Move List</h3>
+            <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-0.5 text-sm font-mono">
+              {Array.from({ length: Math.ceil(moveList.length / 2) }, (_, i) => (
+                <React.Fragment key={i}>
+                  <span className="text-slate-400 select-none">{i + 1}.</span>
+                  <button
+                    onClick={() => goToMove((i * 2) + 1)}
+                    className={`text-left px-1.5 py-0.5 rounded transition
+                      ${currentMoveIndex === (i * 2) + 1
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-700 hover:bg-slate-200'}`}
+                  >
+                    {moveList[i * 2]}
+                  </button>
+                  {moveList[i * 2 + 1] ? (
+                    <button
+                      onClick={() => goToMove((i * 2) + 2)}
+                      className={`text-left px-1.5 py-0.5 rounded transition
+                        ${currentMoveIndex === (i * 2) + 2
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-700 hover:bg-slate-200'}`}
+                    >
+                      {moveList[i * 2 + 1]}
+                    </button>
+                  ) : <span />}
+                </React.Fragment>
+              ))}
             </div>
           </div>
           

@@ -5,6 +5,8 @@ import { Download } from 'lucide-react';
 
 export default function MatchForm({ onMatchesFetched, apiUrl }) {
   const [username, setUsername] = useState('');
+  const [platform, setPlatform] = useState('chess.com');
+  const [importLimit, setImportLimit] = useState(20);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -14,7 +16,10 @@ export default function MatchForm({ onMatchesFetched, apiUrl }) {
     setIsSubmitting(true);
 
     try {
-      const response = await axios.post(`${apiUrl}/fetch`, { username: username.trim() });
+      const endpoint = platform === 'lichess'
+        ? `${apiUrl.replace('/matches', '/matches/fetch-lichess')}`
+        : `${apiUrl}/fetch`;
+      const response = await axios.post(`${endpoint}?limit=${importLimit}`, { username: username.trim() });
       
       const { fetched, matches } = response.data;
       if (fetched === 0) {
@@ -51,13 +56,45 @@ export default function MatchForm({ onMatchesFetched, apiUrl }) {
       </h2>
       
       <form onSubmit={handleSubmit} className="space-y-4 text-sm">
+        <div className="flex rounded-lg border border-slate-200 overflow-hidden text-sm">
+          {['chess.com', 'lichess'].map(p => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setPlatform(p)}
+              className={`flex-1 py-2 font-medium transition
+                ${platform === p
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+            >
+              {p === 'chess.com' ? 'Chess.com' : 'Lichess'}
+            </button>
+          ))}
+        </div>
+
         <div>
-          <label className="block text-slate-600 font-medium mb-1">Chess.com Username</label>
+          <label className="block text-slate-600 font-medium mb-1">
+            {platform === 'chess.com' ? 'Chess.com Username' : 'Lichess Username'}
+          </label>
           <input 
             required type="text" value={username} onChange={(e) => setUsername(e.target.value)}
             className="w-full border border-slate-200 rounded-md px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="e.g., hikaru"
           />
+        </div>
+
+        <div>
+          <label className="block text-slate-600 font-medium mb-1">Games to Import</label>
+          <select
+            value={importLimit}
+            onChange={(e) => setImportLimit(Number(e.target.value))}
+            className="w-full border border-slate-200 rounded-md px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value={5}>5 games</option>
+            <option value={20}>20 games</option>
+            <option value={50}>50 games</option>
+            <option value={100}>100 games (slow)</option>
+          </select>
         </div>
 
         <button 
