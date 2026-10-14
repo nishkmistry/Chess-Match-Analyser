@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import axios from 'axios';
 import { ArrowLeft, ChevronLeft, ChevronRight, Activity, RotateCw } from 'lucide-react';
+import { useTheme } from '../ThemeContext';
 
 const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
 
 export default function AnalysisBoard() {
+  const { theme } = useTheme();
   const { matchId } = useParams();
   const [matchData, setMatchData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -23,6 +25,22 @@ export default function AnalysisBoard() {
   
   const engine = useRef(null);
   const evalUpdateTimeout = useRef(null);
+
+  const customPieces = useMemo(() => {
+    if (!theme?.pieces) return undefined;
+    const pieces = ['wP', 'wN', 'wB', 'wR', 'wQ', 'wK', 'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'];
+    const pieceMap = {};
+    pieces.forEach((p) => {
+      pieceMap[p] = ({ squareWidth }) => (
+        <img
+          src={`https://lichess1.org/assets/piece/${theme.pieces}/${p}.svg`}
+          alt={p}
+          style={{ width: squareWidth, height: squareWidth }}
+        />
+      );
+    });
+    return pieceMap;
+  }, [theme?.pieces]);
   
   useEffect(() => {
     engine.current = new Worker('/stockfish.js');
@@ -150,45 +168,23 @@ export default function AnalysisBoard() {
 
   const displayEval = getDisplayEval();
 
-  
-  const getPieceMap = (fen) => {
-    if (!fen) return {};
-    try {
-      const tempChess = new Chess(fen);
-      const board = tempChess.board();
-      const squares = ['a','b','c','d','e','f','g','h'];
-      const pieceMap = {};
-      for (let r = 0; r < 8; r++) {
-        for (let c = 0; c < 8; c++) {
-          if (board[r][c]) {
-            const piece = board[r][c].color + board[r][c].type.toUpperCase();
-            pieceMap[squares[c] + (8 - r)] = piece;
-          }
-        }
-      }
-      return pieceMap;
-    } catch (e) {
-      return {};
-    }
-  };
-
   const currentFen = historyFens[currentMoveIndex] || 'start';
 
-  if (loading || historyFens.length === 0) return <div className="text-center p-12 text-slate-500">Loading analysis...</div>;
+  if (loading || historyFens.length === 0) return <div className="text-center p-12 text-slate-500" style={{ color: 'var(--theme-text-muted)' }}>Loading analysis...</div>;
   if (error) return <div className="text-center p-12 text-rose-500 font-medium">{error}</div>;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+    <div className="rounded-xl shadow-sm border p-6" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}>
       
       <div className="flex items-center gap-4 mb-6">
         <Link to="/" className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition">
           <ArrowLeft size={20} />
         </Link>
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">
+          <h2 className="text-2xl font-bold" style={{ color: 'var(--theme-text)' }}>
             {matchData?.white_username && matchData?.black_username ? `${matchData.white_username} vs ${matchData.black_username}` : 'Analysis'}
           </h2>
-          <div className="text-sm text-slate-500">
+          <div className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>
             {matchData?.result ? `Result: ${matchData.result}` : 'Game Analysis'}
           </div>
         </div>
@@ -201,43 +197,46 @@ export default function AnalysisBoard() {
               position={currentFen}
               boardOrientation={boardOrientation}
               arePiecesDraggable={false}
+              customDarkSquareStyle={{ backgroundColor: theme.board.dark }}
+              customLightSquareStyle={{ backgroundColor: theme.board.light }}
+              customPieces={customPieces}
             />
           </div>
         </div>
         
         <div className="flex flex-col gap-6">
-          <div className="bg-slate-50 rounded-lg p-6 border border-slate-100">
-            <h3 className="font-semibold text-slate-700 flex items-center gap-2 mb-4">
+          <div className="rounded-lg p-6 border" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
+            <h3 className="font-semibold flex items-center gap-2 mb-4" style={{ color: 'var(--theme-text)' }}>
               <Activity className="text-blue-500" size={18} /> Engine Evaluation
             </h3>
             
-            <div className="flex justify-between items-center bg-white p-4 rounded-md shadow-sm border border-slate-100 mb-2">
-              <span className="text-slate-500 text-sm">Score</span>
+            <div className="flex justify-between items-center p-4 rounded-md shadow-sm border mb-2" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)' }}>
+              <span className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>Score</span>
               <span className={`text-2xl font-mono font-bold ${parseFloat(displayEval) > 0 ? 'text-emerald-600' : parseFloat(displayEval) < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
                 {displayEval}
               </span>
             </div>
             
-            <div className="flex justify-between items-center bg-white p-3 rounded-md shadow-sm border border-slate-100 text-sm">
-                <span className="text-slate-500">Stockfish Best Move</span>
-                <span className="font-mono text-slate-700 font-semibold">{bestMove || '...'}</span>
+            <div className="flex justify-between items-center p-3 rounded-md shadow-sm border text-sm" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)' }}>
+                <span style={{ color: 'var(--theme-text-muted)' }}>Stockfish Best Move</span>
+                <span className="font-mono font-semibold" style={{ color: 'var(--theme-text)' }}>{bestMove || '...'}</span>
             </div>
           </div>
 
-          <div className="bg-slate-50 rounded-lg p-6 border border-slate-100 flex flex-col items-center">
-            <h3 className="font-semibold text-slate-700 w-full mb-4">Game Navigation</h3>
+          <div className="rounded-lg p-6 border flex flex-col items-center" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
+            <h3 className="font-semibold w-full mb-4" style={{ color: 'var(--theme-text)' }}>Game Navigation</h3>
             <div className="flex gap-4">
                <button 
                  onClick={prevMove} 
                  disabled={currentMoveIndex <= 0}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition"
+                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition cursor-pointer"
                  title="Previous Move"
                >
                  <ChevronLeft size={24} />
                </button>
                <button
                  onClick={() => setBoardOrientation(o => o === 'white' ? 'black' : 'white')}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 transition"
+                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 transition cursor-pointer"
                  title="Flip board"
                >
                  <RotateCw size={24} />
@@ -245,39 +244,41 @@ export default function AnalysisBoard() {
                <button 
                  onClick={nextMove} 
                  disabled={currentMoveIndex >= historyFens.length - 1}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition"
+                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition cursor-pointer"
                  title="Next Move"
                >
                  <ChevronRight size={24} />
                </button>
             </div>
-            <div className="mt-4 text-sm text-slate-500">
+            <div className="mt-4 text-sm" style={{ color: 'var(--theme-text-muted)' }}>
                 Move {Math.floor((currentMoveIndex + 1) / 2)} of {Math.floor(historyFens.length / 2)}
             </div>
           </div>
 
-          <div className="bg-slate-50 rounded-lg border border-slate-100 p-4 max-h-64 overflow-y-auto">
-            <h3 className="font-semibold text-slate-700 mb-3 text-sm">Move List</h3>
+          <div className="rounded-lg border p-4 max-h-64 overflow-y-auto" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
+            <h3 className="font-semibold mb-3 text-sm" style={{ color: 'var(--theme-text)' }}>Move List</h3>
             <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-0.5 text-sm font-mono">
               {Array.from({ length: Math.ceil(moveList.length / 2) }, (_, i) => (
                 <React.Fragment key={i}>
-                  <span className="text-slate-400 select-none">{i + 1}.</span>
+                  <span className="select-none" style={{ color: 'var(--theme-text-muted)' }}>{i + 1}.</span>
                   <button
                     onClick={() => goToMove((i * 2) + 1)}
-                    className={`text-left px-1.5 py-0.5 rounded transition
+                    className={`text-left px-1.5 py-0.5 rounded transition cursor-pointer
                       ${currentMoveIndex === (i * 2) + 1
                         ? 'bg-blue-600 text-white'
-                        : 'text-slate-700 hover:bg-slate-200'}`}
+                        : 'hover:bg-slate-200'}`}
+                    style={currentMoveIndex !== (i * 2) + 1 ? { color: 'var(--theme-text)' } : {}}
                   >
                     {moveList[i * 2]}
                   </button>
                   {moveList[i * 2 + 1] ? (
                     <button
                       onClick={() => goToMove((i * 2) + 2)}
-                      className={`text-left px-1.5 py-0.5 rounded transition
+                      className={`text-left px-1.5 py-0.5 rounded transition cursor-pointer
                         ${currentMoveIndex === (i * 2) + 2
                           ? 'bg-blue-600 text-white'
-                          : 'text-slate-700 hover:bg-slate-200'}`}
+                          : 'hover:bg-slate-200'}`}
+                      style={currentMoveIndex !== (i * 2) + 2 ? { color: 'var(--theme-text)' } : {}}
                     >
                       {moveList[i * 2 + 1]}
                     </button>

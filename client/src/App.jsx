@@ -8,11 +8,12 @@ import MatchForm from './components/MatchForm';
 import MatchTable from './components/MatchTable';
 import DashboardStats from './components/DashboardStats';
 import AnalysisBoard from './components/AnalysisBoard';
+import ThemePicker from './components/ThemePicker';
 
 const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
 
 function Dashboard({ matches, setMatches, loading, fetchMatches }) {
-  const handleMatchesFetched = (newMatches) => {
+  const handleMatchesFetched = () => {
     fetchMatches(); // refresh to get updated state, or prepend them
   };
 
@@ -35,7 +36,7 @@ function Dashboard({ matches, setMatches, loading, fetchMatches }) {
       </div>
 
       
-      <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}>
         <MatchTable matches={matches} loading={loading} onDelete={handleMatchDeleted} />
       </div>
     </div>
@@ -63,14 +64,17 @@ function App() {
 
   return (
     <Router>
-      <div className="min-h-screen p-4 md:p-8 bg-slate-50 flex flex-col items-center">
+      <div className="min-h-screen p-4 md:p-8 flex flex-col items-center" style={{ backgroundColor: 'var(--theme-bg)', color: 'var(--theme-text)' }}>
         <ToastContainer position="top-right" autoClose={3000} />
         
-        <header className="w-full max-w-7xl mb-8">
-          <Link to="/">
-            <h1 className="text-3xl md:text-4xl font-extrabold text-slate-800 tracking-tight hover:text-blue-600 transition-colors">Chess Match Analyzer</h1>
-          </Link>
-          <p className="text-slate-500 mt-2 text-lg">Track, analyze, and improve your chess performance based on historical data.</p>
+        <header className="w-full max-w-7xl mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <Link to="/">
+              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight hover:text-blue-600 transition-colors" style={{ color: 'var(--theme-text)' }}>Chess Match Analyzer</h1>
+            </Link>
+            <p className="mt-2 text-lg" style={{ color: 'var(--theme-text-muted)' }}>Track, analyze, and improve your chess performance based on historical data.</p>
+          </div>
+          <ThemePicker />
         </header>
 
         <main className="w-full max-w-7xl">
@@ -85,4 +89,3 @@ function App() {
 }
 
 export default App;
-

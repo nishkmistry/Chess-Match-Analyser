@@ -4,9 +4,21 @@
   --font-sans: 'Inter', system-ui, sans-serif;
 }
 
+:root {
+  --theme-bg: #f8fafc;
+  --theme-primary: #2563eb;
+  --theme-card: #ffffff;
+  --theme-text: #1e293b;
+  --theme-text-muted: #64748b;
+  --theme-border: #e2e8f0;
+  --theme-sq-light: #f0d9b5;
+  --theme-sq-dark: #b58863;
+}
+
 body {
-    background-color: #f3f4f6;
-    color: #1f2937;
-    margin: 0;
-    font-family: var(--font-sans);
+  background-color: var(--theme-bg);
+  color: var(--theme-text);
+  margin: 0;
+  font-family: var(--font-sans);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
