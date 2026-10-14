@@ -31,7 +31,7 @@ export default function ReportPanel({ report, loading, error, onGenerate, onJump
     <section>
       <div className="flex items-baseline justify-between border-b border-rule pb-2">
         <h2 className="section-title">Coach’s notes</h2>
-        <span className="text-xs text-muted">written by Grok</span>
+        <span className="text-xs text-muted">AI-written, via Groq</span>
       </div>
 
       {loading ? (
@@ -75,7 +75,7 @@ export default function ReportPanel({ report, loading, error, onGenerate, onJump
         </div>
       ) : (
         <p className="pt-3 text-sm leading-relaxed text-muted">
-          Grok reads the engine’s evaluations and writes the game up: how the opening went, where it turned, the costliest mistake, and what to work on.
+          An AI coach reads the engine’s evaluations and writes the game up: how the opening went, where it turned, the costliest mistake, and what to work on.
         </p>
       )}
 

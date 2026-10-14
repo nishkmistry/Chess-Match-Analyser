@@ -1,6 +1,6 @@
 # Chess Match Analyser ♟️
 
-**Chess Match Analyser** is a full-stack web application designed for chess enthusiasts to import, track, analyze, and review chess games played on **Chess.com** and **Lichess**. Featuring Stockfish engine evaluation, interactive move-by-move analysis boards, custom match notes, AI-written coaching notes (powered by Grok from xAI), and customizable board/ui themes.
+**Chess Match Analyser** is a full-stack web application designed for chess enthusiasts to import, track, analyze, and review chess games played on **Chess.com** and **Lichess**. Featuring Stockfish engine evaluation, interactive move-by-move analysis boards, custom match notes, AI-written coaching notes (via Groq's free API), and customizable board/ui themes.
 
 ---
 
@@ -13,7 +13,7 @@
   - Full-game review: evaluation graph, plus inaccuracies (?!), mistakes (?) and blunders (??) marked in the move list. Suspect moves get a second, deeper search.
   - Move-by-move navigation with arrow keys or playback controls.
   - Interactive board flipper and move history annotation display.
-- 🤖 **AI Coach's Notes**: Grok reads the engine evaluations and writes up the opening, turning point, costliest mistake and takeaways, with links that jump the board to each moment. The API key stays on the server.
+- 🤖 **AI Coach's Notes**: An LLM on Groq (`openai/gpt-oss-120b` by default) reads the engine evaluations and writes up the opening, turning point, costliest mistake and takeaways, with links that jump the board to each moment. The API key stays on the server.
 - 📊 **Dashboard & Performance Statistics**:
   - Win/Loss/Draw breakdown charts using Chart.js.
   - Rating trends and performance stats.
@@ -84,14 +84,14 @@ DB_NAME=your_pg_database_name
 # Or single connection string:
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 
-# Grok (xAI) key for AI coach's notes: https://console.x.ai
-XAI_API_KEY=your_xai_api_key
+# Groq key for AI coach's notes (free tier): https://console.groq.com/keys
+GROQ_API_KEY=your_groq_api_key
 # Optional
-# XAI_MODEL=grok-4.7
-# XAI_REASONING_EFFORT=low   # set empty when using a non-reasoning model
+# GROQ_MODEL=openai/gpt-oss-120b   # must support strict structured outputs (gpt-oss / qwen3)
+# GROQ_REASONING_EFFORT=low          # set empty when using a non-reasoning model
 ```
 
-The frontend needs no environment variables. AI requests go through the server so the xAI key is never shipped to the browser.
+The frontend needs no environment variables. AI requests go through the server so the Groq key is never shipped to the browser.
 
 ---
 
@@ -159,7 +159,7 @@ npm run dev
 | `POST` | `/api/matches/fetch-lichess` | Fetch and import games for a user from **Lichess**. |
 | `PATCH` | `/api/matches/:id/notes` | Update personal notes for a stored match. |
 | `DELETE` | `/api/matches/:id` | Delete a saved match from the database. |
-| `POST` | `/api/matches/:id/report` | Generate Grok coach's notes. Body: `moves` (SAN list) and `evals` (one score per position, or null). |
+| `POST` | `/api/matches/:id/report` | Generate AI coach's notes via Groq. Body: `moves` (SAN list) and `evals` (one score per position, or null). |
 
 ---
 
