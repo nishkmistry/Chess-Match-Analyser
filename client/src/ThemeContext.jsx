@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useLayoutEffect } from 'react';
 import { THEMES, getRandomTheme } from './themes';
 
 const ThemeContext = createContext(null);
@@ -17,7 +17,7 @@ export function ThemeProvider({ children }) {
   );
 
   // Apply CSS variables to :root whenever theme changes
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     Object.entries({
       '--theme-bg':          theme.ui.bg,
@@ -29,6 +29,7 @@ export function ThemeProvider({ children }) {
       '--theme-sq-light':    theme.board.light,
       '--theme-sq-dark':     theme.board.dark,
     }).forEach(([k, v]) => root.style.setProperty(k, v));
+    root.dataset.mode = theme.mode;
   }, [theme]);
 
   const pickTheme = (id) => {

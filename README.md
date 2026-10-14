@@ -1,6 +1,6 @@
 # Chess Match Analyser ♟️
 
-**Chess Match Analyser** is a full-stack web application designed for chess enthusiasts to import, track, analyze, and review chess games played on **Chess.com** and **Lichess**. Featuring Stockfish engine evaluation, interactive move-by-move analysis boards, custom match notes, AI-generated game summaries (powered by Google Gemini), and customizable board/ui themes.
+**Chess Match Analyser** is a full-stack web application designed for chess enthusiasts to import, track, analyze, and review chess games played on **Chess.com** and **Lichess**. Featuring Stockfish engine evaluation, interactive move-by-move analysis boards, custom match notes, AI-written coaching notes (powered by Grok from xAI), and customizable board/ui themes.
 
 ---
 
@@ -9,10 +9,11 @@
 - 📥 **Game Import**: Import games directly from Chess.com or Lichess by username.
 - ♟️ **Interactive Analysis Board**:
   - Powered by `chess.js` and `react-chessboard`.
-  - Integrated local **Stockfish.js** engine evaluation and move analysis.
+  - Integrated local **Stockfish.js** engine evaluation, best-move arrow and principal variation.
+  - Full-game review: evaluation graph, plus inaccuracies (?!), mistakes (?) and blunders (??) marked in the move list. Suspect moves get a second, deeper search.
   - Move-by-move navigation with arrow keys or playback controls.
   - Interactive board flipper and move history annotation display.
-- 🤖 **AI Match Insights**: Generate detailed game reports and tactical analyses using Gemini AI.
+- 🤖 **AI Coach's Notes**: Grok reads the engine evaluations and writes up the opening, turning point, costliest mistake and takeaways, with links that jump the board to each moment. The API key stays on the server.
 - 📊 **Dashboard & Performance Statistics**:
   - Win/Loss/Draw breakdown charts using Chart.js.
   - Rating trends and performance stats.
@@ -82,12 +83,15 @@ DB_PORT=5432
 DB_NAME=your_pg_database_name
 # Or single connection string:
 DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+# Grok (xAI) key for AI coach's notes: https://console.x.ai
+XAI_API_KEY=your_xai_api_key
+# Optional
+# XAI_MODEL=grok-4.7
+# XAI_REASONING_EFFORT=low   # set empty when using a non-reasoning model
 ```
 
-### **Frontend Environment Variables** (`client/.env`):
-```env
-VITE_GEMINI_API_KEY=your_google_gemini_api_key
-```
+The frontend needs no environment variables. AI requests go through the server so the xAI key is never shipped to the browser.
 
 ---
 
@@ -155,6 +159,7 @@ npm run dev
 | `POST` | `/api/matches/fetch-lichess` | Fetch and import games for a user from **Lichess**. |
 | `PATCH` | `/api/matches/:id/notes` | Update personal notes for a stored match. |
 | `DELETE` | `/api/matches/:id` | Delete a saved match from the database. |
+| `POST` | `/api/matches/:id/report` | Generate Grok coach's notes. Body: `moves` (SAN list) and `evals` (one score per position, or null). |
 
 ---
 
