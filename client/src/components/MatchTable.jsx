@@ -1,11 +1,34 @@
-import React, { useState } from 'react';
-import { format } from 'date-fns';
-import { Search, Trash2, Activity, FileText, Check, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { format, isThisYear } from 'date-fns';
+import { Search, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { API_URL } from '../lib/api';
+import { RESULT_TEXT, scoreLine, sourceLabel } from '../lib/matches';
+import { moveCount, openingName, parsePgnHeaders } from '../lib/chess';
 
-const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
+const PAGE_SIZE = 25;
+const RESULT_FILTERS = [
+  { id: 'All', label: 'All' },
+  { id: 'Win', label: 'Won' },
+  { id: 'Draw', label: 'Drawn' },
+  { id: 'Loss', label: 'Lost' },
+];
+const SOURCE_FILTERS = [
+  { id: 'All', label: 'Every site' },
+  { id: 'chess.com', label: 'Chess.com' },
+  { id: 'lichess', label: 'Lichess' },
+];
+
+function Player({ name, elo, isYou }) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5">
+      <span className={`truncate ${isYou ? 'font-semibold text-ink' : 'text-ink/85'}`}>{name || 'Unknown'}</span>
+      {elo ? <span className="shrink-0 font-mono text-xs text-muted">{elo}</span> : null}
+    </span>
+  );
+}
 
 export default function MatchTable({ matches, loading, onDelete }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -14,14 +37,29 @@ export default function MatchTable({ matches, loading, onDelete }) {
   const [editingNotesId, setEditingNotesId] = useState(null);
   const [notesDraft, setNotesDraft] = useState('');
   const [localNotesMap, setLocalNotesMap] = useState({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [visible, setVisible] = useState(PAGE_SIZE);
+
+  // Opening and length come from the PGN; parse once per game list
+  const details = useMemo(() => {
+    const map = {};
+    for (const m of matches) {
+      map[m.match_id] = { opening: openingName(parsePgnHeaders(m.pgn || '')), moves: moveCount(m.pgn || '') };
+    }
+    return map;
+  }, [matches]);
+
+  const notesFor = (match) => localNotesMap[match.match_id] !== undefined
+    ? localNotesMap[match.match_id]
+    : (match.notes || '');
 
   const handleNotesSave = async (matchId) => {
     try {
       const res = await axios.patch(`${API_URL}/${matchId}/notes`, { notes: notesDraft });
       setLocalNotesMap(prev => ({ ...prev, [matchId]: res.data.notes }));
-      toast.success('Notes saved');
+      toast.success('Note saved');
       setEditingNotesId(null);
-    } catch (err) {
+    } catch {
       toast.error('Failed to save notes');
     }
   };
@@ -30,195 +68,199 @@ export default function MatchTable({ matches, loading, onDelete }) {
     const term = searchTerm.toLowerCase();
     const white = (match.white_username || '').toLowerCase();
     const black = (match.black_username || '').toLowerCase();
-    const currentNotes = localNotesMap[match.match_id] !== undefined
-      ? localNotesMap[match.match_id]
-      : (match.notes || '');
-    const notesLower = currentNotes.toLowerCase();
-    
-    const matchesSearch = white.includes(term) || black.includes(term) || notesLower.includes(term);
+    const notesLower = notesFor(match).toLowerCase();
+    const opening = (details[match.match_id]?.opening || '').toLowerCase();
+
+    const matchesSearch = white.includes(term) || black.includes(term) || notesLower.includes(term) || opening.includes(term);
     const matchesResult = resultFilter === 'All' || match.result === resultFilter;
     const matchesSource = sourceFilter === 'All' || (match.source || 'chess.com') === sourceFilter;
 
     return matchesSearch && matchesResult && matchesSource;
   });
 
-  if (loading) {
-    return (
-      <div className="p-8 text-center text-slate-500">
-        Loading match history...
-      </div>
-    );
-  }
-
-  const getResultStyle = (result) => {
-    switch (result) {
-      case 'Win': return 'text-emerald-600 bg-emerald-50 border-emerald-200';
-      case 'Loss': return 'text-rose-600 bg-rose-50 border-rose-200';
-      case 'Draw': return 'text-amber-600 bg-amber-50 border-amber-200';
-      default: return 'text-slate-600';
-    }
-  };
+  const hasFilters = searchTerm || resultFilter !== 'All' || sourceFilter !== 'All';
+  const resetPaging = () => setVisible(PAGE_SIZE);
 
   return (
-    <div className="flex flex-col h-full">
-      
-      <div className="p-4 md:p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-4">
-        <h2 className="text-xl font-bold text-slate-800">Match History</h2>
-        
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          <select
-            value={resultFilter}
-            onChange={(e) => setResultFilter(e.target.value)}
-            className="border border-slate-200 rounded-md px-2 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="All">All Results</option>
-            <option value="Win">Win</option>
-            <option value="Loss">Loss</option>
-            <option value="Draw">Draw</option>
-          </select>
+    <section className="mt-16">
+      <div className="flex flex-col gap-4 border-b border-rule pb-3 lg:flex-row lg:items-end lg:justify-between">
+        <h2 className="section-title">
+          Games
+          {!loading && (
+            <span className="ml-2 font-sans text-sm font-normal text-muted tabular-nums">
+              {hasFilters ? `${filteredMatches.length} of ${matches.length}` : matches.length}
+            </span>
+          )}
+        </h2>
 
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="border border-slate-200 rounded-md px-2 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="All">All Platforms</option>
-            <option value="chess.com">Chess.com</option>
-            <option value="lichess">Lichess</option>
-          </select>
-
-          <div className="relative flex-1 sm:w-64">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-4 w-4 text-slate-400" />
-            </div>
-            <input
-              type="text"
-              placeholder="Search players or notes..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6">
+          <div className="tabs" role="group" aria-label="Filter by result">
+            {RESULT_FILTERS.map((r) => (
+              <button key={r.id} type="button" aria-pressed={resultFilter === r.id} onClick={() => { setResultFilter(r.id); resetPaging(); }}>
+                {r.label}
+              </button>
+            ))}
           </div>
+          <div className="tabs" role="group" aria-label="Filter by site">
+            {SOURCE_FILTERS.map((s) => (
+              <button key={s.id} type="button" aria-pressed={sourceFilter === s.id} onClick={() => { setSourceFilter(s.id); resetPaging(); }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <label className="relative flex items-center sm:w-56">
+            <Search size={14} className="pointer-events-none absolute left-0 text-muted" />
+            <input
+              type="search"
+              placeholder="Player, opening or note"
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); resetPaging(); }}
+              className="h-8 w-full border-0 border-b border-rule bg-transparent pl-6 text-sm text-ink outline-none placeholder:text-muted/80 focus:border-ink"
+              aria-label="Search games"
+            />
+          </label>
         </div>
       </div>
-      
-      <div className="overflow-x-auto p-0">
-        <table className="w-full text-left text-sm text-slate-600">
-          <thead className="text-xs text-slate-500 uppercase bg-slate-50">
-            <tr>
-              <th className="px-6 py-4 font-medium">Date</th>
-              <th className="px-6 py-4 font-medium">White</th>
-              <th className="px-6 py-4 font-medium">Black</th>
-              <th className="px-6 py-4 font-medium">Rating Diff</th>
-              <th className="px-6 py-4 font-medium text-center">Result</th>
-              <th className="px-6 py-4 font-medium text-center">Actions</th>
+
+      <div className="scroll-thin overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="text-xs text-muted">
+              <th className="py-3 pr-4 font-normal">Date</th>
+              <th className="py-3 pr-4 font-normal">White</th>
+              <th className="py-3 pr-4 font-normal">Black</th>
+              <th className="py-3 pr-4 text-center font-normal">Result</th>
+              <th className="hidden py-3 pr-4 font-normal lg:table-cell">Opening</th>
+              <th className="hidden py-3 pr-4 text-right font-normal md:table-cell">Moves</th>
+              <th className="py-3 font-normal"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredMatches.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="px-6 py-8 text-center text-slate-500 font-medium italic">
-                  No matches found.
+          <tbody>
+            {loading ? (
+              Array.from({ length: 6 }, (_, i) => (
+                <tr key={i} className="border-t border-rule">
+                  {[16, 28, 28, 10, 40, 8, 16].map((w, j) => (
+                    <td key={j} className={`py-3.5 pr-4 ${j === 4 ? 'hidden lg:table-cell' : ''} ${j === 5 ? 'hidden md:table-cell' : ''}`}>
+                      <div className="skeleton h-3.5" style={{ width: `${w * 3}px` }} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : filteredMatches.length === 0 ? (
+              <tr className="border-t border-rule">
+                <td colSpan="7" className="py-16 text-center">
+                  {matches.length === 0 ? (
+                    <p className="font-serif text-lg italic text-muted">No games yet. Import a username above to get started.</p>
+                  ) : (
+                    <p className="text-muted">
+                      Nothing matches those filters.{' '}
+                      <button type="button" className="link" onClick={() => { setSearchTerm(''); setResultFilter('All'); setSourceFilter('All'); }}>
+                        Clear them
+                      </button>
+                    </p>
+                  )}
                 </td>
               </tr>
             ) : (
-              filteredMatches.map((match) => {
-                const currentNotes = localNotesMap[match.match_id] !== undefined
-                  ? localNotesMap[match.match_id]
-                  : (match.notes || '');
+              filteredMatches.slice(0, visible).map((match) => {
+                const currentNotes = notesFor(match);
                 const isEditing = editingNotesId === match.match_id;
+                const isConfirming = confirmDeleteId === match.match_id;
+                const you = (match.tracked_username || '').toLowerCase();
+                const playedAt = new Date(match.played_at);
+                const { opening, moves } = details[match.match_id] ?? {};
 
                 return (
                   <React.Fragment key={match.match_id}>
-                    <tr className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4">
-                        {format(new Date(match.played_at), 'MMM d, yyyy')}
-                        <div className="text-xs text-slate-400 ml-0.5 capitalize">
-                          {format(new Date(match.played_at), 'HH:mm')} • {match.source || 'chess.com'}
-                        </div>
+                    <tr className="group border-t border-rule transition-colors hover:bg-wash">
+                      <td className="whitespace-nowrap py-3 pr-4 align-top">
+                        <div className="text-ink tabular-nums">{format(playedAt, isThisYear(playedAt) ? 'd MMM' : 'd MMM yyyy')}</div>
+                        <div className="text-xs text-muted">{sourceLabel(match.source)}</div>
                       </td>
-                      <td className="px-6 py-4 font-medium text-slate-800">
-                        {match.white_username || 'Unknown'}
+                      <td className="max-w-[11rem] py-3 pr-4 align-top">
+                        <Player name={match.white_username} elo={match.white_elo} isYou={(match.white_username || '').toLowerCase() === you} />
                       </td>
-                      <td className="px-6 py-4 font-medium text-slate-800">
-                        {match.black_username || 'Unknown'}
+                      <td className="max-w-[11rem] py-3 pr-4 align-top">
+                        <Player name={match.black_username} elo={match.black_elo} isYou={(match.black_username || '').toLowerCase() === you} />
                       </td>
-                      <td className="px-6 py-4">
-                        <div><span className="text-slate-400">White: </span>{match.white_elo}</div>
-                        <div><span className="text-slate-400">Black: </span>{match.black_elo}</div>
+                      <td className={`whitespace-nowrap py-3 pr-4 text-center align-top font-mono font-semibold ${RESULT_TEXT[match.result] ?? 'text-muted'}`}>
+                        {scoreLine(match)}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-center">
-                          <span className={`px-2.5 py-1 text-xs font-semibold rounded-md border ${getResultStyle(match.result)}`}>
-                            {match.result}
+                      <td className="hidden max-w-[16rem] py-3 pr-4 align-top text-muted lg:table-cell">
+                        <span className="line-clamp-1" title={opening || undefined}>{opening || '—'}</span>
+                      </td>
+                      <td className="hidden py-3 pr-4 text-right align-top font-mono text-muted tabular-nums md:table-cell">
+                        {moves || '—'}
+                      </td>
+                      <td className="whitespace-nowrap py-3 text-right align-top">
+                        {isConfirming ? (
+                          <span className="text-sm">
+                            <span className="text-muted">Delete this game? </span>
+                            <button type="button" className="font-medium text-red-700 hover:underline dark:text-red-400 cursor-pointer" onClick={() => { setConfirmDeleteId(null); onDelete(match.match_id); }}>
+                              Delete
+                            </button>
+                            <span className="text-muted"> / </span>
+                            <button type="button" className="text-muted hover:text-ink cursor-pointer" onClick={() => setConfirmDeleteId(null)}>
+                              Keep
+                            </button>
                           </span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-center items-center gap-3">
-                          <button
-                            onClick={() => {
-                              if (isEditing) {
-                                setEditingNotesId(null);
-                              } else {
-                                setEditingNotesId(match.match_id);
-                                setNotesDraft(currentNotes);
-                              }
-                            }}
-                            className={`transition ${currentNotes ? 'text-amber-500 hover:text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
-                            title="Match Notes"
-                          >
-                            <FileText size={18} />
-                          </button>
-                          {match.pgn && (
-                            <Link
-                              to={`/analysis/${match.match_id}`}
-                              className="text-blue-500 hover:text-blue-700 transition"
-                              title="Analyze Game"
-                            >
-                              <Activity size={18} />
-                            </Link>
-                          )}
-                          <button
-                            onClick={() => {
-                                if(window.confirm('Are you sure you want to delete this match?')) {
-                                    onDelete(match.match_id);
-                                }
-                            }}
-                            className="text-slate-400 hover:text-rose-500 transition"
-                            title="Delete Game"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-4 text-sm">
+                            <span className="inline-flex items-center gap-4 transition sm:opacity-60 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
+                              <button
+                                type="button"
+                                className="text-muted hover:text-ink cursor-pointer"
+                                onClick={() => {
+                                  if (isEditing) {
+                                    setEditingNotesId(null);
+                                  } else {
+                                    setEditingNotesId(match.match_id);
+                                    setNotesDraft(currentNotes);
+                                  }
+                                }}
+                              >
+                                {currentNotes ? 'Edit note' : 'Note'}
+                              </button>
+                              <button type="button" className="text-muted hover:text-red-700 dark:hover:text-red-400 cursor-pointer" onClick={() => setConfirmDeleteId(match.match_id)}>
+                                Delete
+                              </button>
+                            </span>
+                            {match.pgn && (
+                              <Link to={`/analysis/${match.match_id}`} className="font-medium text-accent hover:underline underline-offset-4">
+                                Review
+                              </Link>
+                            )}
+                          </span>
+                        )}
                       </td>
                     </tr>
-                    {isEditing && (
-                      <tr className="bg-slate-50 border-b border-slate-100">
-                        <td colSpan="6" className="px-6 py-3">
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              value={notesDraft}
-                              onChange={(e) => setNotesDraft(e.target.value)}
-                              placeholder="Add personal match notes (e.g., missed tactical blow move 15)..."
-                              className="flex-1 border border-slate-200 rounded px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <button
-                              onClick={() => handleNotesSave(match.match_id)}
-                              className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-                              title="Save Notes"
+                    {(currentNotes || isEditing) && (
+                      <tr>
+                        <td />
+                        <td colSpan="6" className="pb-3 pr-4">
+                          {isEditing ? (
+                            <form
+                              className="flex items-center gap-2"
+                              onSubmit={(e) => { e.preventDefault(); handleNotesSave(match.match_id); }}
                             >
-                              <Check size={16} />
-                            </button>
-                            <button
-                              onClick={() => setEditingNotesId(null)}
-                              className="p-1.5 bg-slate-200 text-slate-600 rounded hover:bg-slate-300 transition"
-                              title="Cancel"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
+                              <input
+                                type="text"
+                                autoFocus
+                                value={notesDraft}
+                                maxLength={1000}
+                                onChange={(e) => setNotesDraft(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Escape') setEditingNotesId(null); }}
+                                placeholder="What do you want to remember about this game?"
+                                className="field flex-1"
+                              />
+                              <button type="submit" className="btn btn-ink">Save</button>
+                              <button type="button" onClick={() => setEditingNotesId(null)} className="icon-btn" aria-label="Cancel">
+                                <X size={16} />
+                              </button>
+                            </form>
+                          ) : (
+                            <p className="font-serif text-[15px] italic text-muted">{currentNotes}</p>
+                          )}
                         </td>
                       </tr>
                     )}
@@ -229,6 +271,14 @@ export default function MatchTable({ matches, loading, onDelete }) {
           </tbody>
         </table>
       </div>
-    </div>
+
+      {!loading && filteredMatches.length > visible && (
+        <div className="border-t border-rule pt-4 text-center">
+          <button type="button" onClick={() => setVisible((v) => v + PAGE_SIZE)} className="btn btn-line">
+            Show {Math.min(PAGE_SIZE, filteredMatches.length - visible)} more
+          </button>
+        </div>
+      )}
+    </section>
   );
 }

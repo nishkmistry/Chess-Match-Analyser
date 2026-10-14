@@ -1,7 +1,23 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
 @theme {
-  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  /* Plex has no chess glyphs, so figurines (♘ ♗ ...) fall through to Noto Sans Symbols 2 */
+  --font-fig: 'IBM Plex Mono', 'Noto Sans Symbols 2', ui-monospace, monospace;
+}
+
+/* Theme tokens -> utilities: bg-paper, bg-wash, text-ink, text-muted, border-rule, text-accent ... */
+@theme inline {
+  --color-paper: var(--theme-card);
+  --color-wash: var(--theme-bg);
+  --color-ink: var(--theme-text);
+  --color-muted: var(--theme-text-muted);
+  --color-rule: var(--theme-border);
+  --color-accent: var(--theme-primary);
 }
 
 :root {
@@ -13,12 +29,108 @@
   --theme-border: #e2e8f0;
   --theme-sq-light: #f0d9b5;
   --theme-sq-dark: #b58863;
+  color-scheme: light;
+}
+
+:root[data-mode="dark"] {
+  color-scheme: dark;
 }
 
 body {
-  background-color: var(--theme-bg);
+  background-color: var(--theme-card);
   color: var(--theme-text);
   margin: 0;
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--theme-primary) 25%, transparent);
+}
+
+@layer components {
+  .section-title {
+    @apply font-serif text-[1.4rem] font-semibold leading-tight tracking-[-0.01em] text-ink;
+  }
+
+  .fig {
+    font-family: var(--font-fig);
+  }
+
+  .btn {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-[3px] border px-3.5 text-sm font-medium whitespace-nowrap
+      transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-45
+      focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+  }
+
+  .btn-ink {
+    @apply border-ink bg-ink text-paper hover:opacity-85;
+  }
+
+  .btn-line {
+    @apply border-rule bg-paper text-ink hover:border-muted;
+  }
+
+  .field {
+    @apply h-9 w-full rounded-[3px] border border-rule bg-paper px-3 text-sm text-ink placeholder:text-muted/80
+      outline-none transition focus:border-ink;
+  }
+
+  .icon-btn {
+    @apply inline-grid size-9 place-items-center rounded-[3px] text-muted transition cursor-pointer
+      hover:bg-wash hover:text-ink disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent
+      focus-visible:outline-2 focus-visible:outline-accent;
+  }
+
+  /* Text tabs: plain words, the active one underlined */
+  .tabs {
+    @apply flex flex-wrap items-center gap-x-4 gap-y-1 text-sm;
+  }
+
+  .tabs > button {
+    @apply -mb-px border-b-2 border-transparent pb-1 text-muted transition cursor-pointer hover:text-ink;
+  }
+
+  .tabs > button[aria-pressed="true"] {
+    @apply border-accent font-medium text-ink;
+  }
+
+  .link {
+    @apply text-accent underline-offset-4 hover:underline cursor-pointer;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-[2px] bg-wash;
+  }
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-border) transparent;
+}
+
+/* react-toastify, toned down to match */
+.Toastify__toast {
+  border-radius: 3px;
+  border: 1px solid var(--theme-border);
+  background: var(--theme-card);
+  color: var(--theme-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  box-shadow: 0 6px 20px -8px rgb(0 0 0 / 0.25);
+  min-height: 52px;
+}
+
+.Toastify__close-button {
+  color: var(--theme-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

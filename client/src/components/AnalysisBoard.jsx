@@ -4,10 +4,59 @@ import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import axios from 'axios';
 import { toast } from 'react-toastify';
-import { ArrowLeft, ChevronLeft, ChevronRight, Activity, RotateCw, Sparkles, AlertTriangle, Lightbulb, Target, BookOpen } from 'lucide-react';
+import { format } from 'date-fns';
+import { ArrowLeft, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { useTheme } from '../ThemeContext';
+import { API_URL } from '../lib/api';
+import { CLASSIFICATIONS, analyseGame, classifyMoves, formatEval, isExactScore, parseScore, toWhitePov } from '../lib/evaluation';
+import { figurine, formatLine, formatTimeControl, gameStatus, materialBalance, openingName, parsePgnHeaders, pvToSan } from '../lib/chess';
+import { RESULT_TEXT, scoreLine, sourceLabel } from '../lib/matches';
+import EvalBar from './analysis/EvalBar';
+import EvalGraph from './analysis/EvalGraph';
+import MoveList from './analysis/MoveList';
+import GameReview from './analysis/GameReview';
+import ReportPanel from './analysis/ReportPanel';
 
-const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
+const LIVE_DEPTH = 16;
+const BADGE_COLORS = { blunder: '#dc2626', mistake: '#ea580c', inaccuracy: '#d97706' };
+
+function PlayerLine({ color, name, elo, isYou, material, toMove }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-2">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className={`size-2.5 shrink-0 self-center border ${color === 'white' ? 'border-stone-400 bg-white' : 'border-stone-900 bg-stone-900 dark:border-stone-500'}`} />
+        <span className={`truncate text-ink ${isYou ? 'font-semibold' : ''}`}>{name}</span>
+        {elo ? <span className="shrink-0 font-mono text-sm text-muted">{elo}</span> : null}
+      </div>
+      <span className="shrink-0 font-mono text-xs text-muted">
+        {material > 0 && <span className="text-ink">+{material}</span>}
+        {material > 0 && toMove && ' · '}
+        {toMove && 'to move'}
+      </span>
+    </div>
+  );
+}
+
+function AnalysisSkeleton() {
+  return (
+    <div>
+      <div className="skeleton h-4 w-20" />
+      <div className="mt-5 border-b border-rule pb-6">
+        <div className="skeleton h-10 w-80 max-w-full" />
+        <div className="skeleton mt-3 h-4 w-64" />
+      </div>
+      <div className="mt-8 grid grid-cols-1 gap-x-12 gap-y-10 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="mx-auto w-full max-w-[max(20rem,calc(100svh-12rem))]">
+          <div className="skeleton aspect-square w-full" />
+        </div>
+        <div className="space-y-4">
+          <div className="skeleton h-24" />
+          <div className="skeleton h-64" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AnalysisBoard() {
   const { theme } = useTheme();
@@ -15,491 +64,450 @@ export default function AnalysisBoard() {
   const [matchData, setMatchData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  
-  const [historyFens, setHistoryFens] = useState([]);
-  const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
-  const [moveList, setMoveList] = useState([]);
-  const [boardOrientation, setBoardOrientation] = useState('white');
-  
-  const [evaluation, setEvaluation] = useState('0.00');
-  const [bestMove, setBestMove] = useState('');
 
-  const [evalHistory, setEvalHistory] = useState([]);   // array of { type: 'cp'|'mate', val: number }
-  const [evalProgress, setEvalProgress] = useState(0);  // 0–100 for progress bar
+  const [historyFens, setHistoryFens] = useState([]);
+  const [moves, setMoves] = useState([]);
+  const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
+  const [boardOrientation, setBoardOrientation] = useState('white');
+
+  const [liveEval, setLiveEval] = useState(null);   // { fen, score, depth, pv } — score is from White's POV
+  const [showBestMove, setShowBestMove] = useState(true);
+
+  const [evalHistory, setEvalHistory] = useState([]);   // one White-POV score per position
+  const [evalProgress, setEvalProgress] = useState(null);  // { phase, done, total } while analysing the game
   const [reportLoading, setReportLoading] = useState(false);
   const [report, setReport] = useState(null);
-  
+  const [reportError, setReportError] = useState('');
+
   const engine = useRef(null);
+  const analysingFen = useRef(null);
+  const legalMoves = useRef(new Set());
+  const pendingEval = useRef(null);
   const evalUpdateTimeout = useRef(null);
+  const batchAbort = useRef(null);
+  const boardRef = useRef(null);
+
+  const lastIndex = Math.max(historyFens.length - 1, 0);
+  const currentFen = historyFens[currentMoveIndex];
 
   const customPieces = useMemo(() => {
     if (!theme?.pieces) return undefined;
     const pieces = ['wP', 'wN', 'wB', 'wR', 'wQ', 'wK', 'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'];
     const pieceMap = {};
     pieces.forEach((p) => {
-      pieceMap[p] = ({ squareWidth }) => (
+      pieceMap[p] = () => (
         <img
           src={`https://lichess1.org/assets/piece/${theme.pieces}/${p}.svg`}
           alt={p}
-          style={{ width: squareWidth, height: squareWidth }}
+          draggable={false}
+          style={{ width: '100%', height: '100%' }}
         />
       );
     });
     return pieceMap;
   }, [theme?.pieces]);
-  
+
+  // Live engine for the position on the board
   useEffect(() => {
-    engine.current = new Worker('/stockfish.js');
-    engine.current.postMessage('uci');
-    
-    engine.current.onmessage = (event) => {
-      const line = event.data;
-      if (line.includes('info depth') && line.includes('score')) {
-        const scoreMatch = line.match(/score (cp|mate) (-?\d+)/);
-        if (scoreMatch) {
-          const type = scoreMatch[1];
-          const val = parseInt(scoreMatch[2], 10);
-          
-          if (!evalUpdateTimeout.current) {
-            evalUpdateTimeout.current = setTimeout(() => {
-              if (type === 'mate') {
-                setEvaluation({ cp: val, type: 'mate' });
-              } else {
-                setEvaluation({ cp: val, type: 'cp' });
-              }
-              evalUpdateTimeout.current = null;
-            }, 100);
-          }
-        }
-      }
-      if (line.includes('bestmove')) {
-        const parts = line.split(' ');
-        if (parts[1]) setBestMove(parts[1]);
-      }
-    };
-    
-    return () => {
-      if (engine.current) engine.current.terminate();
-      if (evalUpdateTimeout.current) clearTimeout(evalUpdateTimeout.current);
-    };
-  }, []);
+    const worker = new Worker('/stockfish.js');
+    engine.current = worker;
+    worker.postMessage('uci');
 
-  const analyzePosition = useCallback((fen) => {
-    if (engine.current && fen) {
-        engine.current.postMessage('stop');
-        engine.current.postMessage(`position fen ${fen}`);
-        engine.current.postMessage('go depth 15');
-    }
-  }, []);
+    worker.onmessage = ({ data: line }) => {
+      if (typeof line !== 'string' || !isExactScore(line)) return;
+      const fen = analysingFen.current;
+      const pv = line.match(/ pv (.+)$/)?.[1].split(' ') ?? [];
+      // Ignore output still arriving from the previous position's search
+      if (!fen || (pv[0] && !legalMoves.current.has(pv[0]))) return;
 
-  const batchEvaluate = () => {
-    return new Promise((resolve) => {
-      if (!engine.current || historyFens.length === 0) return resolve([]);
-
-      const results = new Array(historyFens.length).fill(null);
-      let idx = 0;
-      let latestEval = null;
-
-      const evalNext = () => {
-        if (idx >= historyFens.length) {
-          setEvalHistory(results);
-          setEvalProgress(100);
-          return resolve(results);
-        }
-
-        setEvalProgress(Math.round((idx / historyFens.length) * 100));
-        latestEval = null;
-
-        engine.current.postMessage('stop');
-        engine.current.postMessage(`position fen ${historyFens[idx]}`);
-        engine.current.postMessage('go depth 12');
-
-        const handler = (e) => {
-          const line = e.data;
-
-          if (line.includes('score')) {
-            const m = line.match(/score (cp|mate) (-?\d+)/);
-            if (m) latestEval = { type: m[1], val: parseInt(m[2], 10) };
-          }
-
-          if (line.startsWith('bestmove')) {
-            engine.current.removeEventListener('message', handler);
-            results[idx] = latestEval;
-            idx++;
-            evalNext();
-          }
-        };
-
-        engine.current.addEventListener('message', handler);
+      pendingEval.current = {
+        fen,
+        score: toWhitePov(parseScore(line), fen),
+        depth: parseInt(line.match(/ depth (\d+)/)?.[1] ?? '0', 10),
+        pv,
       };
+      if (!evalUpdateTimeout.current) {
+        evalUpdateTimeout.current = setTimeout(() => {
+          setLiveEval(pendingEval.current);
+          evalUpdateTimeout.current = null;
+        }, 100);
+      }
+    };
 
-      evalNext();
+    return () => {
+      worker.terminate();
+      clearTimeout(evalUpdateTimeout.current);
+      evalUpdateTimeout.current = null;
+      batchAbort.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!engine.current || !currentFen) return;
+    analysingFen.current = currentFen;
+    legalMoves.current = new Set(new Chess(currentFen).moves({ verbose: true }).map((m) => m.lan));
+    engine.current.postMessage('stop');
+    engine.current.postMessage(`position fen ${currentFen}`);
+    engine.current.postMessage(`go depth ${LIVE_DEPTH}`);
+  }, [currentFen]);
+
+  // Fetch PGN
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMatch = async () => {
+      setLoading(true);
+      setError('');
+      setReport(null);
+      setReportError('');
+      setEvalHistory([]);
+      try {
+        const res = await axios.get(`${API_URL}/${matchId}`);
+        if (cancelled) return;
+        setMatchData(res.data);
+        if (res.data?.player_color) {
+          setBoardOrientation(res.data.player_color);
+        }
+
+        if (!res.data.pgn) {
+          setError('No valid PGN attached to this match.');
+          return;
+        }
+        try {
+          const game = new Chess();
+          game.loadPgn(res.data.pgn);
+          const verbose = game.history({ verbose: true });
+          setMoves(verbose);
+          // `before`/`after` FENs also handle games that start from a custom position
+          setHistoryFens(verbose.length ? [verbose[0].before, ...verbose.map((m) => m.after)] : [game.fen()]);
+          setCurrentMoveIndex(0);
+        } catch (pgnError) {
+          console.error('PGN parse error:', pgnError);
+          setError(`Could not parse game PGN. (${pgnError.message})`);
+        }
+      } catch (err) {
+        if (!cancelled) setError('Failed to fetch match. ' + (err.response?.data?.error || ''));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchMatch();
+    return () => { cancelled = true; };
+  }, [matchId]);
+
+  const goToMove = useCallback((index) => {
+    setCurrentMoveIndex(Math.max(0, Math.min(index, lastIndex)));
+  }, [lastIndex]);
+
+  const step = useCallback((delta) => {
+    setCurrentMoveIndex((i) => Math.max(0, Math.min(i + delta, lastIndex)));
+  }, [lastIndex]);
+
+  const flipBoard = useCallback(() => setBoardOrientation((o) => (o === 'white' ? 'black' : 'white')), []);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.target.closest?.('input, textarea, select, [contenteditable="true"]') || e.metaKey || e.ctrlKey || e.altKey) return;
+      const actions = {
+        ArrowRight: () => step(1),
+        ArrowLeft: () => step(-1),
+        ArrowUp: () => goToMove(0),
+        Home: () => goToMove(0),
+        ArrowDown: () => goToMove(lastIndex),
+        End: () => goToMove(lastIndex),
+        f: flipBoard,
+      };
+      const action = actions[e.key];
+      if (action) {
+        e.preventDefault();
+        action();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [step, goToMove, flipBoard, lastIndex]);
+
+  const runAnalysis = useCallback(async () => {
+    batchAbort.current?.abort();
+    const controller = new AbortController();
+    batchAbort.current = controller;
+    setEvalProgress({ phase: 'scan', done: 0, total: historyFens.length });
+    try {
+      const results = await analyseGame(historyFens, {
+        signal: controller.signal,
+        onProgress: setEvalProgress,
+      });
+      setEvalHistory(results);
+      return results;
+    } finally {
+      if (batchAbort.current === controller) {
+        batchAbort.current = null;
+        setEvalProgress(null);
+      }
+    }
+  }, [historyFens]);
+
+  const handleAnalyze = () => {
+    runAnalysis().catch((err) => {
+      if (err.name !== 'AbortError') toast.error('Engine analysis failed');
     });
   };
 
-  const generateReport = async (evalResults) => {
-    const evals = evalResults || evalHistory;
-    if (evals.length === 0) return;
+  const handleGenerateReport = async () => {
+    setReportError('');
+    let evals = evalHistory;
+    if (evals.length === 0) {
+      try {
+        evals = await runAnalysis();
+      } catch (err) {
+        if (err.name !== 'AbortError') toast.error('Engine analysis failed');
+        return;
+      }
+    }
 
     setReportLoading(true);
-    setReport(null);
-
     try {
-      // Build a compact eval string — one line per half-move
-      const evalSummary = evals.map((e, i) => {
-        if (!e) return `Move ${i}: unknown`;
-        const score = e.type === 'mate'
-          ? `#${e.val}`
-          : `${(e.val / 100).toFixed(2)}`;
-        return `${i}: ${score}`;
-      }).join(', ');
-
-      // Extract player names and result for context
-      const white = matchData?.white_username || 'White';
-      const black = matchData?.black_username || 'Black';
-      const result = matchData?.result || 'Unknown';
-
-      const prompt = `You are a chess coach reviewing a game between ${white} (White) and ${black} (Black). The result was: ${result}.
-
-PGN:
-${matchData?.pgn || ''}
-
-Stockfish centipawn evaluation per half-move (0=start, positive=White advantage, negative=Black advantage, # prefix=forced mate):
-${evalSummary}
-
-Analyze this game and respond with ONLY a valid JSON object using exactly these keys. No markdown, no backticks, no extra text — raw JSON only.
-
-{
-  "opening": "Name of the opening or defence, and one sentence on how each side handled the opening phase",
-  "turning_point": "The half-move index and move notation where the evaluation shifted most dramatically, and why",
-  "blunder": "The single biggest mistake — half-move index, move played, and a short explanation of why it was losing",
-  "missed_win": "The most significant missed opportunity — half-move index, what should have been played, and the idea behind it. Use null if there was no clear missed win.",
-  "summary": "One sentence describing how the game was ultimately decided"
-}`;
-
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 1024,
-              responseMimeType: 'application/json',  // Gemini Flash supports this — forces JSON output
-            }
-          })
-        }
-      );
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `Gemini API returned ${res.status}`);
-      }
-
-      const data = await res.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) throw new Error('Empty response from Gemini');
-
-      // Strip fences just in case (responseMimeType should prevent them)
-      const cleaned = rawText.replace(/```json|```/gi, '').trim();
-      const parsed = JSON.parse(cleaned);
-      setReport(parsed);
-
+      const res = await axios.post(`${API_URL}/${matchId}/report`, {
+        moves: moves.map((m) => m.san),
+        evals,
+      });
+      setReport(res.data);
     } catch (err) {
+      const message = err.response?.data?.error || err.message;
       console.error('Report generation failed:', err);
-      toast.error(`Report failed: ${err.message}`);
+      setReportError(message);
+      toast.error(`Report failed: ${message}`);
     } finally {
       setReportLoading(false);
     }
   };
 
-  const handleGenerateReport = async () => {
-    let evals = evalHistory;
-    if (evals.length === 0) {
-      toast.info('Evaluating positions (this takes ~15 seconds)...');
-      evals = await batchEvaluate();
-    }
-    await generateReport(evals);
+  const labelForPly = useCallback((ply) => {
+    const m = moves[ply - 1];
+    if (!m) return null;
+    return `${m.before.split(' ')[5]}${m.color === 'w' ? '.' : '…'} ${figurine(m.san)}`;
+  }, [moves]);
+
+  const jumpToPly = (ply) => {
+    goToMove(ply);
+    boardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
-  // Fetch PGN
-  useEffect(() => {
-    const fetchMatch = async () => {
-      try {
-        const res = await axios.get(`${API_URL}/${matchId}`);
-        setMatchData(res.data);
-        if (res.data?.player_color) {
-          setBoardOrientation(res.data.player_color);
-        }
-        
-        if (res.data.pgn) {
-          try {
-            const pgnGame = new Chess();
-            pgnGame.loadPgn(res.data.pgn, { sloppy: true });
-            const moves = pgnGame.history({ verbose: true });
-            setMoveList(moves.map(m => m.san));
+  const classifications = useMemo(
+    () => (evalHistory.length ? classifyMoves(evalHistory, historyFens) : []),
+    [evalHistory, historyFens],
+  );
 
-            const replayGame = new Chess();
-            const fens = [replayGame.fen()];
+  const live = liveEval?.fen === currentFen ? liveEval : null;
+  const displayScore = live?.score ?? evalHistory[currentMoveIndex] ?? null;
+  const status = useMemo(() => (currentFen ? gameStatus(currentFen) : null), [currentFen]);
+  const line = useMemo(() => (live?.pv.length ? pvToSan(currentFen, live.pv) : []), [live, currentFen]);
+  const material = currentFen ? materialBalance(currentFen) : 0;
+  const whiteToMove = currentFen?.split(' ')[1] === 'w';
 
-            for (const move of moves) {
-              replayGame.move(move);
-              fens.push(replayGame.fen());
-            }
+  const lastMove = moves[currentMoveIndex - 1];
+  const lastMoveTag = classifications[currentMoveIndex];
 
-            setHistoryFens(fens);
-            setCurrentMoveIndex(0);
-            analyzePosition(fens[0]);
-
-          } catch (pgnError) {
-            console.error('PGN parse error:', pgnError);
-            setError(`Could not parse game PGN. (${pgnError.message})`);
-          }
-        } else {
-          setError('No valid PGN attached to this match.');
-        }
-      } catch (err) {
-        setError('Failed to fetch match. ' + (err.response?.data?.error || ''));
-      } finally {
-        setLoading(false);
+  const squareStyles = lastMove
+    ? {
+        [lastMove.from]: { backgroundColor: 'rgba(234, 179, 8, 0.32)' },
+        [lastMove.to]: { backgroundColor: 'rgba(234, 179, 8, 0.48)' },
       }
-    };
-    fetchMatch();
-  }, [matchId, analyzePosition]);
+    : {};
 
-  const goToMove = (index) => {
-    if (index < 0 || index >= historyFens.length) return;
-    setCurrentMoveIndex(index);
-    setEvaluation({ cp: 0, type: 'cp' });
-    analyzePosition(historyFens[index]);
+  const arrows = showBestMove && !status && live?.pv[0]
+    ? [{ startSquare: live.pv[0].slice(0, 2), endSquare: live.pv[0].slice(2, 4), color: 'rgba(21, 128, 61, 0.8)' }]
+    : [];
+
+  const squareRenderer = ({ square, children }) => (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {children}
+      {lastMoveTag && square === lastMove?.to && (
+        <span
+          className="pointer-events-none absolute right-[4%] top-[4%] z-10 grid size-[34%] place-items-center rounded-full font-mono text-[clamp(8px,1.3vw,12px)] font-semibold text-white shadow ring-[1.5px] ring-white"
+          style={{ backgroundColor: BADGE_COLORS[lastMoveTag] }}
+        >
+          {CLASSIFICATIONS[lastMoveTag].symbol}
+        </span>
+      )}
+    </div>
+  );
+
+  const headers = useMemo(() => parsePgnHeaders(matchData?.pgn), [matchData?.pgn]);
+
+  if (loading) return <AnalysisSkeleton />;
+
+  if (error || historyFens.length === 0) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <p className="font-serif text-2xl text-ink">This game couldn’t be opened.</p>
+        <p className="mt-2 text-sm text-muted">{error || 'It has no moves to look at.'}</p>
+        <Link to="/" className="btn btn-line mt-6">
+          <ArrowLeft size={15} /> Back to your games
+        </Link>
+      </div>
+    );
+  }
+
+  const white = matchData?.white_username || 'White';
+  const black = matchData?.black_username || 'Black';
+  const you = (matchData?.tracked_username || '').toLowerCase();
+  const gameUrl = matchData?.game_hash?.startsWith('http') ? matchData.game_hash : null;
+  const meta = [
+    [sourceLabel(matchData?.source), matchData?.played_at && format(new Date(matchData.played_at), 'd MMMM yyyy')].filter(Boolean).join(', '),
+    formatTimeControl(headers.TimeControl),
+    openingName(headers),
+  ].filter(Boolean);
+
+  const players = {
+    white: { color: 'white', name: white, elo: matchData?.white_elo, isYou: white.toLowerCase() === you, material },
+    black: { color: 'black', name: black, elo: matchData?.black_elo, isYou: black.toLowerCase() === you, material: -material },
   };
-
-  const nextMove = useCallback(() => goToMove(currentMoveIndex + 1), [currentMoveIndex, historyFens.length]);
-  const prevMove = useCallback(() => goToMove(currentMoveIndex - 1), [currentMoveIndex, historyFens.length]);
-
-  useEffect(() => {
-    const handleKey = (e) => {
-      if (e.key === 'ArrowRight') nextMove();
-      if (e.key === 'ArrowLeft') prevMove();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [nextMove, prevMove]);
-  
-  
-  const getDisplayEval = () => {
-     if (!historyFens[currentMoveIndex]) return '0.00';
-     const fen = historyFens[currentMoveIndex];
-     const isWhiteTurn = fen.split(' ')[1] === 'w';
-     
-     if (evaluation.type === 'mate') {
-       return `M${evaluation.cp}`;
-     } else if (evaluation.type === 'cp') {
-       const evalFactor = isWhiteTurn ? 1 : -1;
-       const finalScore = (evaluation.cp * evalFactor / 100).toFixed(2);
-       return finalScore > 0 ? `+${finalScore}` : finalScore;
-     }
-     return '0.00';
-  };
-
-  const displayEval = getDisplayEval();
-
-  const currentFen = historyFens[currentMoveIndex] || 'start';
-
-  if (loading || historyFens.length === 0) return <div className="text-center p-12 text-slate-500" style={{ color: 'var(--theme-text-muted)' }}>Loading analysis...</div>;
-  if (error) return <div className="text-center p-12 text-rose-500 font-medium">{error}</div>;
+  const top = boardOrientation === 'white' ? 'black' : 'white';
+  const bottom = boardOrientation;
+  const bestMove = line[0] ? formatLine([line[0]]) : null;
 
   return (
-    <div className="rounded-xl shadow-sm border p-6" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)', color: 'var(--theme-text)' }}>
-      
-      <div className="flex items-center gap-4 mb-6">
-        <Link to="/" className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition">
-          <ArrowLeft size={20} />
-        </Link>
-        <div>
-          <h2 className="text-2xl font-bold" style={{ color: 'var(--theme-text)' }}>
-            {matchData?.white_username && matchData?.black_username ? `${matchData.white_username} vs ${matchData.black_username}` : 'Analysis'}
-          </h2>
-          <div className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>
-            {matchData?.result ? `Result: ${matchData.result}` : 'Game Analysis'}
-          </div>
+    <div>
+      <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-muted transition hover:text-ink">
+        <ArrowLeft size={14} /> All games
+      </Link>
+
+      <div className="mt-4 flex flex-wrap items-end justify-between gap-x-8 gap-y-3 border-b border-rule pb-6">
+        <div className="min-w-0">
+          <h1 className="font-serif text-3xl font-semibold leading-tight tracking-[-0.02em] text-ink md:text-[2.6rem]">
+            {white} <span className="font-normal text-muted">–</span> {black}
+          </h1>
+          <p className="mt-2 text-muted">{meta.join(' · ')}</p>
+        </div>
+        <div className="flex items-baseline gap-5">
+          {gameUrl && (
+            <a href={gameUrl} target="_blank" rel="noreferrer" className="link text-sm">
+              Open on {sourceLabel(matchData?.source)} ↗
+            </a>
+          )}
+          <span className={`font-serif text-[2.6rem] font-semibold leading-none ${RESULT_TEXT[matchData?.result] ?? 'text-ink'}`}>
+            {scoreLine(matchData)}
+          </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-        <div className="flex flex-col items-center">
-          <div className="w-full max-w-[480px]">
-            <Chessboard
-              position={currentFen}
-              boardOrientation={boardOrientation}
-              arePiecesDraggable={false}
-              customDarkSquareStyle={{ backgroundColor: theme.board.dark }}
-              customLightSquareStyle={{ backgroundColor: theme.board.light }}
-              customPieces={customPieces}
-            />
-          </div>
-        </div>
-        
-        <div className="flex flex-col gap-6">
-          {/* Progress bar — shown while batch evaluating */}
-          {evalProgress > 0 && evalProgress < 100 && (
-            <div className="w-full bg-slate-200 rounded-full h-1.5">
-              <div
-                className="bg-blue-500 h-1.5 rounded-full transition-all duration-200"
-                style={{ width: `${evalProgress}%` }}
+      <div className="mt-8 grid grid-cols-1 items-start gap-x-12 gap-y-12 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div ref={boardRef} className="mx-auto w-full max-w-[max(20rem,calc(100svh-12rem))] scroll-mt-6">
+          <PlayerLine {...players[top]} material={Math.max(players[top].material, 0)} toMove={!status && (top === 'white') === whiteToMove} />
+          <div className="flex gap-1.5">
+            <EvalBar score={displayScore} orientation={boardOrientation} />
+            <div className="min-w-0 flex-1">
+              <Chessboard
+                options={{
+                  id: 'analysis-board',
+                  position: currentFen,
+                  boardOrientation,
+                  allowDragging: false,
+                  animationDurationInMs: 180,
+                  darkSquareStyle: { backgroundColor: theme.board.dark },
+                  lightSquareStyle: { backgroundColor: theme.board.light },
+                  pieces: customPieces,
+                  arrows,
+                  squareStyles,
+                  squareRenderer,
+                }}
               />
             </div>
-          )}
+          </div>
+          <PlayerLine {...players[bottom]} material={Math.max(players[bottom].material, 0)} toMove={!status && (bottom === 'white') === whiteToMove} />
 
-          {/* Generate button */}
-          <button
-            onClick={handleGenerateReport}
-            disabled={reportLoading || historyFens.length === 0}
-            className="w-full flex items-center justify-center gap-2 bg-violet-600
-                       hover:bg-violet-700 text-white font-medium py-2.5 px-4
-                       rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          >
-            <Sparkles size={16} />
-            {reportLoading ? 'Generating Report...' : 'Generate AI Report'}
-          </button>
+          <div className="mt-1 flex items-center justify-between gap-2 border-y border-rule py-1.5">
+            <div className="flex items-center">
+              <button type="button" onClick={() => goToMove(0)} disabled={currentMoveIndex === 0} className="icon-btn" aria-label="First move" title="First move (↑)">
+                <ChevronsLeft size={18} />
+              </button>
+              <button type="button" onClick={() => step(-1)} disabled={currentMoveIndex === 0} className="icon-btn" aria-label="Previous move" title="Previous move (←)">
+                <ChevronLeft size={18} />
+              </button>
+              <button type="button" onClick={() => step(1)} disabled={currentMoveIndex >= lastIndex} className="icon-btn" aria-label="Next move" title="Next move (→)">
+                <ChevronRight size={18} />
+              </button>
+              <button type="button" onClick={() => goToMove(lastIndex)} disabled={currentMoveIndex >= lastIndex} className="icon-btn" aria-label="Last move" title="Last move (↓)">
+                <ChevronsRight size={18} />
+              </button>
+            </div>
+            <span className="fig truncate text-sm text-ink tabular-nums">
+              {currentMoveIndex === 0 ? 'Starting position' : labelForPly(currentMoveIndex)}
+            </span>
+            <button type="button" onClick={flipBoard} className="icon-btn" aria-label="Flip board" title="Flip board (F)">
+              <ArrowUpDown size={17} />
+            </button>
+          </div>
+          <p className="mt-2 hidden text-xs text-muted sm:block">
+            Arrow keys step through the game, ↑ and ↓ jump to the start and end, F flips the board.
+          </p>
 
-          {/* Report display */}
-          {report && (
-            <div className="rounded-lg border border-slate-100 divide-y divide-slate-100 overflow-hidden">
-
-              <div className="p-4 flex items-start gap-3 bg-white">
-                <BookOpen size={16} className="text-blue-500 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
-                    Opening
-                  </p>
-                  <p className="text-sm text-slate-700">{report.opening}</p>
-                </div>
-              </div>
-
-              <div className="p-4 flex items-start gap-3 bg-white">
-                <Target size={16} className="text-amber-500 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
-                    Turning Point
-                  </p>
-                  <p className="text-sm text-slate-700">{report.turning_point}</p>
-                </div>
-              </div>
-
-              <div className="p-4 flex items-start gap-3 bg-white">
-                <AlertTriangle size={16} className="text-rose-500 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
-                    Biggest Blunder
-                  </p>
-                  <p className="text-sm text-slate-700">{report.blunder}</p>
-                </div>
-              </div>
-
-              {report.missed_win && (
-                <div className="p-4 flex items-start gap-3 bg-white">
-                  <Lightbulb size={16} className="text-emerald-500 mt-0.5 shrink-0" />
-                  <div>
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
-                      Missed Win
-                    </p>
-                    <p className="text-sm text-slate-700">{report.missed_win}</p>
-                  </div>
-                </div>
-              )}
-
-              <div className="p-4 bg-slate-50">
-                <p className="text-sm text-slate-600 italic">"{report.summary}"</p>
-              </div>
+          {evalHistory.length > 0 && (
+            <div className="mt-5">
+              <EvalGraph
+                evals={evalHistory}
+                classifications={classifications}
+                moves={moves}
+                currentIndex={currentMoveIndex}
+                onSelect={goToMove}
+              />
+              <p className="mt-1.5 text-xs text-muted">Evaluation over the game. White’s advantage is shaded light. Click anywhere to jump there.</p>
             </div>
           )}
+        </div>
 
-          <div className="rounded-lg p-6 border" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
-            <h3 className="font-semibold flex items-center gap-2 mb-4" style={{ color: 'var(--theme-text)' }}>
-              <Activity className="text-blue-500" size={18} /> Engine Evaluation
-            </h3>
-            
-            <div className="flex justify-between items-center p-4 rounded-md shadow-sm border mb-2" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)' }}>
-              <span className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>Score</span>
-              <span className={`text-2xl font-mono font-bold ${parseFloat(displayEval) > 0 ? 'text-emerald-600' : parseFloat(displayEval) < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                {displayEval}
+        <div className="space-y-10">
+          <section>
+            <div className="flex items-baseline justify-between border-b border-rule pb-2">
+              <h2 className="section-title">Engine</h2>
+              <span className="font-mono text-xs text-muted">
+                Stockfish{live && !status ? ` · depth ${live.depth}` : ''}
               </span>
             </div>
-            
-            <div className="flex justify-between items-center p-3 rounded-md shadow-sm border text-sm" style={{ backgroundColor: 'var(--theme-card)', borderColor: 'var(--theme-border)' }}>
-                <span style={{ color: 'var(--theme-text-muted)' }}>Stockfish Best Move</span>
-                <span className="font-mono font-semibold" style={{ color: 'var(--theme-text)' }}>{bestMove || '...'}</span>
+            <div className="flex items-baseline gap-4 pt-3">
+              <span className="font-mono text-[1.75rem] font-semibold leading-none text-ink tabular-nums">
+                {formatEval(displayScore)}
+              </span>
+              <span className="min-w-0 truncate text-sm text-muted">
+                {status ?? (bestMove ? <>best is <span className="fig text-[15px] font-medium text-ink">{bestMove}</span></> : 'thinking…')}
+              </span>
             </div>
-          </div>
+            {line.length > 1 && (
+              <p className="fig mt-2 truncate text-[13px] text-muted" title={formatLine(line)}>{formatLine(line)}</p>
+            )}
+            <label className="mt-3 flex w-fit items-center gap-2 text-xs text-muted cursor-pointer">
+              <input type="checkbox" checked={showBestMove} onChange={(e) => setShowBestMove(e.target.checked)} className="accent-[var(--theme-primary)]" />
+              Draw the best move on the board
+            </label>
+          </section>
 
-          <div className="rounded-lg p-6 border flex flex-col items-center" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
-            <h3 className="font-semibold w-full mb-4" style={{ color: 'var(--theme-text)' }}>Game Navigation</h3>
-            <div className="flex gap-4">
-               <button 
-                 onClick={prevMove} 
-                 disabled={currentMoveIndex <= 0}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition cursor-pointer"
-                 title="Previous Move"
-               >
-                 <ChevronLeft size={24} />
-               </button>
-               <button
-                 onClick={() => setBoardOrientation(o => o === 'white' ? 'black' : 'white')}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 transition cursor-pointer"
-                 title="Flip board"
-               >
-                 <RotateCw size={24} />
-               </button>
-               <button 
-                 onClick={nextMove} 
-                 disabled={currentMoveIndex >= historyFens.length - 1}
-                 className="p-3 bg-white border border-slate-200 rounded-md shadow-sm hover:bg-slate-50 disabled:opacity-50 transition cursor-pointer"
-                 title="Next Move"
-               >
-                 <ChevronRight size={24} />
-               </button>
+          <section>
+            <h2 className="section-title border-b border-rule pb-2">Moves</h2>
+            <div className="pt-2">
+              <MoveList moves={moves} classifications={classifications} currentIndex={currentMoveIndex} onSelect={goToMove} />
             </div>
-            <div className="mt-4 text-sm" style={{ color: 'var(--theme-text-muted)' }}>
-                Move {Math.floor((currentMoveIndex + 1) / 2)} of {Math.floor(historyFens.length / 2)}
-            </div>
-          </div>
+          </section>
 
-          <div className="rounded-lg border p-4 max-h-64 overflow-y-auto" style={{ backgroundColor: 'var(--theme-bg)', borderColor: 'var(--theme-border)' }}>
-            <h3 className="font-semibold mb-3 text-sm" style={{ color: 'var(--theme-text)' }}>Move List</h3>
-            <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-0.5 text-sm font-mono">
-              {Array.from({ length: Math.ceil(moveList.length / 2) }, (_, i) => (
-                <React.Fragment key={i}>
-                  <span className="select-none" style={{ color: 'var(--theme-text-muted)' }}>{i + 1}.</span>
-                  <button
-                    onClick={() => goToMove((i * 2) + 1)}
-                    className={`text-left px-1.5 py-0.5 rounded transition cursor-pointer
-                      ${currentMoveIndex === (i * 2) + 1
-                        ? 'bg-blue-600 text-white'
-                        : 'hover:bg-slate-200'}`}
-                    style={currentMoveIndex !== (i * 2) + 1 ? { color: 'var(--theme-text)' } : {}}
-                  >
-                    {moveList[i * 2]}
-                  </button>
-                  {moveList[i * 2 + 1] ? (
-                    <button
-                      onClick={() => goToMove((i * 2) + 2)}
-                      className={`text-left px-1.5 py-0.5 rounded transition cursor-pointer
-                        ${currentMoveIndex === (i * 2) + 2
-                          ? 'bg-blue-600 text-white'
-                          : 'hover:bg-slate-200'}`}
-                      style={currentMoveIndex !== (i * 2) + 2 ? { color: 'var(--theme-text)' } : {}}
-                    >
-                      {moveList[i * 2 + 1]}
-                    </button>
-                  ) : <span />}
-                </React.Fragment>
-              ))}
-            </div>
-          </div>
-          
+          <GameReview
+            evals={evalHistory}
+            classifications={classifications}
+            fens={historyFens}
+            progress={evalProgress}
+            onAnalyze={handleAnalyze}
+            white={white}
+            black={black}
+          />
+
+          <ReportPanel
+            report={report}
+            loading={reportLoading}
+            error={reportError}
+            onGenerate={handleGenerateReport}
+            onJump={jumpToPly}
+            labelForPly={labelForPly}
+            busy={evalProgress !== null}
+            needsAnalysis={evalHistory.length === 0}
+          />
         </div>
       </div>
     </div>
