@@ -47,6 +47,13 @@ export default function AnalysisBoard() {
     });
     return pieceMap;
   }, [theme?.pieces]);
+
+  const customArrows = useMemo(() => {
+    if (!bestMove || bestMove.length < 4) return [];
+    const from = bestMove.substring(0, 2);
+    const to = bestMove.substring(2, 4);
+    return [[from, to, 'rgb(59, 130, 246)']];
+  }, [bestMove]);
   
   useEffect(() => {
     engine.current = new Worker('/stockfish.js');
@@ -86,6 +93,7 @@ export default function AnalysisBoard() {
 
   const analyzePosition = useCallback((fen) => {
     if (engine.current && fen) {
+        setBestMove('');
         engine.current.postMessage('stop');
         engine.current.postMessage(`position fen ${fen}`);
         engine.current.postMessage('go depth 15');
@@ -338,6 +346,7 @@ Analyze this game and respond with ONLY a valid JSON object using exactly these 
               customDarkSquareStyle={{ backgroundColor: theme.board.dark }}
               customLightSquareStyle={{ backgroundColor: theme.board.light }}
               customPieces={customPieces}
+              customArrows={customArrows}
             />
           </div>
         </div>
