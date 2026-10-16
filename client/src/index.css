@@ -90,11 +90,14 @@ body {
     @apply flex flex-wrap items-center gap-x-4 gap-y-1 text-sm;
   }
 
-  .tabs > button {
+  .tabs > button,
+  .tabs > a {
     @apply -mb-px border-b-2 border-transparent pb-1 text-muted transition cursor-pointer hover:text-ink;
   }
 
-  .tabs > button[aria-pressed="true"] {
+  /* Filter tabs mark the choice with aria-pressed, nav links with aria-current */
+  .tabs > button[aria-pressed="true"],
+  .tabs > a[aria-current="page"] {
     @apply border-accent font-medium text-ink;
   }
 

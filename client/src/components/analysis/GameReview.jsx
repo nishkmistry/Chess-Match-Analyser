@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
+import { format } from 'date-fns';
 import { CLASSIFICATIONS } from '../../lib/evaluation';
 
 const ORDER = ['inaccuracy', 'mistake', 'blunder'];
 
-export default function GameReview({ evals, classifications, fens, progress, onAnalyze, white, black }) {
+export default function GameReview({ evals, classifications, fens, progress, onAnalyze, white, black, savedAt }) {
   const counts = useMemo(() => {
     const out = { w: { blunder: 0, mistake: 0, inaccuracy: 0 }, b: { blunder: 0, mistake: 0, inaccuracy: 0 } };
     classifications.forEach((c, ply) => {
@@ -56,6 +57,8 @@ export default function GameReview({ evals, classifications, fens, progress, onA
             <tr>
               <td colSpan={4} className="pt-2 text-xs text-muted">
                 ?! inaccuracy · ? mistake · ?? blunder, judged by how much each move cost in winning chances.
+                {' '}{savedAt ? `Saved ${format(new Date(savedAt), 'd MMM')}. ` : ''}
+                <button type="button" onClick={onAnalyze} className="link">Run it again</button>
               </td>
             </tr>
           </tfoot>
@@ -63,7 +66,7 @@ export default function GameReview({ evals, classifications, fens, progress, onA
       ) : (
         <div className="pt-3">
           <p className="text-sm leading-relaxed text-muted">
-            Let Stockfish score every position, then look harder at the moves that seem to lose ground. You get an evaluation graph under the board and each slip marked in the move list. It takes about a second per move.
+            Let Stockfish score every position, then look harder at the moves that seem to lose ground. You get an evaluation graph under the board and each slip marked in the move list. It takes about a second per move, and the result is saved, along with a training puzzle for each of your mistakes.
           </p>
           <button type="button" onClick={onAnalyze} className="btn btn-line mt-3">
             Review all moves

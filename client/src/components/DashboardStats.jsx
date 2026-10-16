@@ -88,7 +88,7 @@ export function StatStrip({ matches, loading }) {
           <dd className="mt-1 font-serif text-[2.6rem] font-medium leading-none tracking-[-0.02em] text-ink tabular-nums">
             {loading ? <span className="skeleton inline-block h-9 w-20" /> : item.value}
           </dd>
-          <dd className="mt-2 truncate text-sm text-muted">
+          <dd className="mt-2 text-sm text-muted md:truncate">
             {loading ? <span className="skeleton inline-block h-3.5 w-28" /> : item.sub}
           </dd>
         </div>
@@ -189,7 +189,7 @@ export function RatingChart({ matches, loading }) {
         ticks: { color: ui.textMuted, maxTicksLimit: 6, maxRotation: 0, font: { size: 11, family: "'IBM Plex Mono', monospace" } },
       },
       y: {
-        position: 'right',
+        position: 'left',
         grid: { color: ui.border, tickBorderDash: [2, 3] },
         border: { display: false, dash: [2, 3] },
         ticks: { color: ui.textMuted, maxTicksLimit: 5, precision: 0, font: { size: 11, family: "'IBM Plex Mono', monospace" } },

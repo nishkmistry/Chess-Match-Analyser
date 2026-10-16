@@ -122,7 +122,8 @@ export default function MatchTable({ matches, loading, onDelete }) {
         </div>
       </div>
 
-      <div className="scroll-thin overflow-x-auto">
+      {/* relative: keeps the absolutely positioned sr-only header inside the scroller on narrow screens */}
+      <div className="scroll-thin relative overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="text-xs text-muted">
