@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import axios from 'axios';
@@ -9,13 +9,17 @@ import { ArrowLeft, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, Chevro
 import { useTheme } from '../ThemeContext';
 import { API_URL } from '../lib/api';
 import { CLASSIFICATIONS, analyseGame, classifyMoves, formatEval, isExactScore, parseScore, toWhitePov } from '../lib/evaluation';
-import { figurine, formatLine, formatTimeControl, gameStatus, materialBalance, openingName, parsePgnHeaders, pvToSan } from '../lib/chess';
+import { figurine, formatLine, formatTimeControl, gameFromPgn, gameStatus, materialBalance, openingName, parsePgnHeaders, pvToSan } from '../lib/chess';
+import { moveTimes } from '../lib/clock';
 import { RESULT_TEXT, scoreLine, sourceLabel } from '../lib/matches';
+import { saveReview } from '../lib/review';
 import EvalBar from './analysis/EvalBar';
 import EvalGraph from './analysis/EvalGraph';
 import MoveList from './analysis/MoveList';
 import GameReview from './analysis/GameReview';
 import ReportPanel from './analysis/ReportPanel';
+import ClockPanel from './analysis/ClockPanel';
+import usePieceSet from './usePieceSet';
 
 const LIVE_DEPTH = 16;
 const BADGE_COLORS = { blunder: '#dc2626', mistake: '#ea580c', inaccuracy: '#d97706' };
@@ -61,6 +65,8 @@ function AnalysisSkeleton() {
 export default function AnalysisBoard() {
   const { theme } = useTheme();
   const { matchId } = useParams();
+  const [searchParams] = useSearchParams();
+  const startPly = Number(searchParams.get('ply')) || 0;
   const [matchData, setMatchData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -74,6 +80,7 @@ export default function AnalysisBoard() {
   const [showBestMove, setShowBestMove] = useState(true);
 
   const [evalHistory, setEvalHistory] = useState([]);   // one White-POV score per position
+  const [analysedAt, setAnalysedAt] = useState(null);
   const [evalProgress, setEvalProgress] = useState(null);  // { phase, done, total } while analysing the game
   const [reportLoading, setReportLoading] = useState(false);
   const [report, setReport] = useState(null);
@@ -89,23 +96,9 @@ export default function AnalysisBoard() {
 
   const lastIndex = Math.max(historyFens.length - 1, 0);
   const currentFen = historyFens[currentMoveIndex];
+  const clock = useMemo(() => (matchData?.pgn ? moveTimes(matchData.pgn, moves.length) : null), [matchData?.pgn, moves.length]);
 
-  const customPieces = useMemo(() => {
-    if (!theme?.pieces) return undefined;
-    const pieces = ['wP', 'wN', 'wB', 'wR', 'wQ', 'wK', 'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'];
-    const pieceMap = {};
-    pieces.forEach((p) => {
-      pieceMap[p] = () => (
-        <img
-          src={`https://lichess1.org/assets/piece/${theme.pieces}/${p}.svg`}
-          alt={p}
-          draggable={false}
-          style={{ width: '100%', height: '100%' }}
-        />
-      );
-    });
-    return pieceMap;
-  }, [theme?.pieces]);
+  const customPieces = usePieceSet(theme?.pieces);
 
   // Live engine for the position on the board
   useEffect(() => {
@@ -160,8 +153,13 @@ export default function AnalysisBoard() {
       setReport(null);
       setReportError('');
       setEvalHistory([]);
+      setAnalysedAt(null);
       try {
-        const res = await axios.get(`${API_URL}/${matchId}`);
+        const [res, saved] = await Promise.all([
+          axios.get(`${API_URL}/${matchId}`),
+          // A missing review is normal; a failed lookup just means analysing again
+          axios.get(`${API_URL}/${matchId}/analysis`).then((r) => r.data).catch(() => null),
+        ]);
         if (cancelled) return;
         setMatchData(res.data);
         if (res.data?.player_color) {
@@ -173,13 +171,15 @@ export default function AnalysisBoard() {
           return;
         }
         try {
-          const game = new Chess();
-          game.loadPgn(res.data.pgn);
-          const verbose = game.history({ verbose: true });
+          const { moves: verbose, fens } = gameFromPgn(res.data.pgn);
           setMoves(verbose);
-          // `before`/`after` FENs also handle games that start from a custom position
-          setHistoryFens(verbose.length ? [verbose[0].before, ...verbose.map((m) => m.after)] : [game.fen()]);
-          setCurrentMoveIndex(0);
+          setHistoryFens(fens);
+          setCurrentMoveIndex(Math.max(0, Math.min(startPly, fens.length - 1)));
+          if (saved?.evals?.length === fens.length) {
+            setEvalHistory(saved.evals);
+            setAnalysedAt(saved.analysed_at);
+          }
+          if (saved?.report) setReport({ ...saved.report, reported_at: saved.reported_at });
         } catch (pgnError) {
           console.error('PGN parse error:', pgnError);
           setError(`Could not parse game PGN. (${pgnError.message})`);
@@ -192,6 +192,8 @@ export default function AnalysisBoard() {
     };
     fetchMatch();
     return () => { cancelled = true; };
+    // startPly only matters when the game first loads
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
   const goToMove = useCallback((index) => {
@@ -232,19 +234,27 @@ export default function AnalysisBoard() {
     batchAbort.current = controller;
     setEvalProgress({ phase: 'scan', done: 0, total: historyFens.length });
     try {
-      const results = await analyseGame(historyFens, {
+      const { evals, best } = await analyseGame(historyFens, {
         signal: controller.signal,
         onProgress: setEvalProgress,
       });
-      setEvalHistory(results);
-      return results;
+      setEvalHistory(evals);
+      try {
+        const saved = await saveReview(matchData, { moves, fens: historyFens, evals, best });
+        setAnalysedAt(saved.data.analysed_at);
+        if (saved.data.puzzles) toast.info(`${saved.data.puzzles} position${saved.data.puzzles === 1 ? '' : 's'} added to your training deck.`);
+      } catch (saveError) {
+        console.error('Saving the review failed:', saveError);
+        toast.error('Review finished, but it could not be saved.');
+      }
+      return evals;
     } finally {
       if (batchAbort.current === controller) {
         batchAbort.current = null;
         setEvalProgress(null);
       }
     }
-  }, [historyFens]);
+  }, [historyFens, matchData, moves]);
 
   const handleAnalyze = () => {
     runAnalysis().catch((err) => {
@@ -269,6 +279,7 @@ export default function AnalysisBoard() {
       const res = await axios.post(`${API_URL}/${matchId}/report`, {
         moves: moves.map((m) => m.san),
         evals,
+        clocks: clock?.times.map(({ left, spent, pressure }) => ({ left, spent, pressure })),
       });
       setReport(res.data);
     } catch (err) {
@@ -454,6 +465,19 @@ export default function AnalysisBoard() {
               <p className="mt-1.5 text-xs text-muted">Evaluation over the game. White’s advantage is shaded light. Click anywhere to jump there.</p>
             </div>
           )}
+
+          {clock && (
+            <ClockPanel
+              clock={clock}
+              moves={moves}
+              classifications={classifications}
+              currentIndex={currentMoveIndex}
+              onSelect={goToMove}
+              white={white}
+              black={black}
+              you={matchData?.player_color ? matchData.player_color[0] : null}
+            />
+          )}
         </div>
 
         <div className="space-y-10">
@@ -496,6 +520,7 @@ export default function AnalysisBoard() {
             onAnalyze={handleAnalyze}
             white={white}
             black={black}
+            savedAt={analysedAt}
           />
 
           <ReportPanel

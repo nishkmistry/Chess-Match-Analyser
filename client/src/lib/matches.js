@@ -10,6 +10,27 @@ export const sourceLabel = (source) => (source === 'lichess' ? 'Lichess' : 'Ches
 // Ratings only make sense within one account on one platform
 export const accountKey = (m) => `${m.source || 'chess.com'}:${(m.tracked_username || '').toLowerCase()}`;
 
+// Every imported account, most games first
+export function listAccounts(matches) {
+  const accounts = new Map();
+  for (const m of matches) {
+    if (!m.tracked_username) continue;
+    const key = accountKey(m);
+    const a = accounts.get(key) ?? { key, username: m.tracked_username, source: m.source || 'chess.com', label: `${m.tracked_username} on ${sourceLabel(m.source)}`, games: 0 };
+    a.games++;
+    accounts.set(key, a);
+  }
+  return [...accounts.values()].sort((a, b) => b.games - a.games);
+}
+
+// The account a page is about: the chosen one if it still exists, else the one with most games
+export function resolveAccount(accounts, chosen) {
+  if (chosen === 'all') return 'all';
+  return accounts.find((a) => a.key === chosen)?.key ?? accounts[0]?.key ?? 'all';
+}
+
+export const inAccount = (matches, key) => (key === 'all' ? matches : matches.filter((m) => accountKey(m) === key));
+
 // Colour for the tracked player's outcome
 export const RESULT_TEXT = {
   Win: 'text-green-700 dark:text-green-400',

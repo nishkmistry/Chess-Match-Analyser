@@ -58,7 +58,7 @@ export const CLASSIFICATIONS = {
 };
 
 // How much each move cost the player who made it, in winning chances. Indexed by ply.
-function moveDrops(evals, fens) {
+export function moveDrops(evals, fens) {
   return evals.map((cur, ply) => {
     const prev = evals[ply - 1];
     if (ply === 0 || !prev || !cur) return 0;
@@ -106,8 +106,9 @@ function removeTempoBias(evals, fens, bias) {
 // Full-game analysis: a quick pass over every position, then deeper searches on the moves that
 // look like mistakes, since a shallow search often misjudges sharp tactics.
 // onProgress receives { phase: 'scan' | 'verify', done, total }.
+// Resolves to { evals, best }: a White-POV score and the engine's best move (UCI) per position.
 export async function analyseGame(fens, { onProgress, signal } = {}) {
-  const raw = await evaluatePositions(fens, {
+  const { scores: raw, best } = await evaluatePositions(fens, {
     depth: 12,
     movetime: 800,
     signal,
@@ -134,12 +135,13 @@ export async function analyseGame(fens, { onProgress, signal } = {}) {
       onProgress: (done, total) => onProgress?.({ phase: 'verify', done, total }),
     });
     indexes.forEach((i, k) => {
-      if (deep[k]) raw[i] = deep[k];
+      if (deep.scores[k]) raw[i] = deep.scores[k];
+      if (deep.best[k]) best[i] = deep.best[k];
       verified.add(i);
     });
   }
 
-  return removeTempoBias(raw, fens, bias);
+  return { evals: removeTempoBias(raw, fens, bias), best };
 }
 
 // This Stockfish build never answers `go` with `bestmove` when the game is already over,
@@ -152,10 +154,12 @@ function terminalScore(fen) {
 }
 
 // Evaluate every position on a dedicated Stockfish worker so live analysis is never disturbed.
+// Resolves to { scores, best }, one entry per position (best is null where the game is over).
 export function evaluatePositions(fens, { depth = 12, movetime = 800, onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker('/stockfish.js');
     const results = new Array(fens.length).fill(null);
+    const best = new Array(fens.length).fill(null);
     let idx = 0;
     let latest = null;
 
@@ -170,7 +174,7 @@ export function evaluatePositions(fens, { depth = 12, movetime = 800, onProgress
       for (let terminal; idx < fens.length && (terminal = terminalScore(fens[idx])); idx++) {
         results[idx] = terminal;
       }
-      if (idx >= fens.length) return finish(() => resolve(results));
+      if (idx >= fens.length) return finish(() => resolve({ scores: results, best }));
       onProgress?.(idx, fens.length);
       latest = null;
       worker.postMessage(`position fen ${fens[idx]}`);
@@ -185,6 +189,8 @@ export function evaluatePositions(fens, { depth = 12, movetime = 800, onProgress
         latest = parseScore(line);
       } else if (line.startsWith('bestmove')) {
         results[idx] = toWhitePov(latest, fens[idx]);
+        const move = line.split(' ')[1];
+        if (/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)) best[idx] = move;
         idx++;
         evalNext();
       }

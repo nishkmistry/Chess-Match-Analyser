@@ -1,6 +1,8 @@
 import { LoaderCircle } from 'lucide-react';
+import { format } from 'date-fns';
 
-function MoveLink({ ply, labelForPly, onJump }) {
+// verified === false: the coach cited a move Stockfish didn't flag, even after being asked to fix it
+function MoveLink({ ply, labelForPly, onJump, verified }) {
   const label = ply !== null && ply !== undefined ? labelForPly(ply) : null;
   if (!label) return null;
   return (
@@ -14,6 +16,11 @@ function MoveLink({ ply, labelForPly, onJump }) {
       >
         {label}
       </button>
+      {verified === false && (
+        <span className="ml-1.5 font-sans text-xs text-amber-700 dark:text-amber-400" title="Stockfish didn't flag this move as a mistake, so treat this note with care">
+          not flagged by Stockfish
+        </span>
+      )}
     </>
   );
 }
@@ -31,7 +38,9 @@ export default function ReportPanel({ report, loading, error, onGenerate, onJump
     <section>
       <div className="flex items-baseline justify-between border-b border-rule pb-2">
         <h2 className="section-title">Coach’s notes</h2>
-        <span className="text-xs text-muted">AI-written, via Groq</span>
+        <span className="text-xs text-muted">
+          AI-written, via Groq{report?.reported_at ? ` · saved ${format(new Date(report.reported_at), 'd MMM')}` : ''}
+        </span>
       </div>
 
       {loading ? (
@@ -47,16 +56,16 @@ export default function ReportPanel({ report, loading, error, onGenerate, onJump
           <Note head="Opening">{report.opening}</Note>
           <Note head="Turning point">
             {report.turning_point.text}
-            <MoveLink ply={report.turning_point.ply} labelForPly={labelForPly} onJump={onJump} />
+            <MoveLink ply={report.turning_point.ply} labelForPly={labelForPly} onJump={onJump} verified={report.checks?.turning_point} />
           </Note>
           <Note head="Costliest mistake">
             {report.blunder.text}
-            <MoveLink ply={report.blunder.ply} labelForPly={labelForPly} onJump={onJump} />
+            <MoveLink ply={report.blunder.ply} labelForPly={labelForPly} onJump={onJump} verified={report.checks?.blunder} />
           </Note>
           {report.missed_win && (
             <Note head="Missed win">
               {report.missed_win.text}
-              <MoveLink ply={report.missed_win.ply} labelForPly={labelForPly} onJump={onJump} />
+              <MoveLink ply={report.missed_win.ply} labelForPly={labelForPly} onJump={onJump} verified={report.checks?.missed_win} />
             </Note>
           )}
           {report.lessons?.length > 0 && (
@@ -75,7 +84,7 @@ export default function ReportPanel({ report, loading, error, onGenerate, onJump
         </div>
       ) : (
         <p className="pt-3 text-sm leading-relaxed text-muted">
-          An AI coach reads the engine’s evaluations and writes the game up: how the opening went, where it turned, the costliest mistake, and what to work on.
+          An AI coach reads the engine’s evaluations and the clock times and writes the game up: how the opening went, where it turned, the costliest mistake, and what to work on. It may only point at moves Stockfish flagged, and every move it cites is checked.
         </p>
       )}
 

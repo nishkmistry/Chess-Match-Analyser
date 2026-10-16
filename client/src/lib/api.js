@@ -1,1 +1,2 @@
-export const API_URL = import.meta.env.PROD ? '/api/matches' : 'http://localhost:5000/api/matches';
+export const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:5000/api';
+export const API_URL = `${API_BASE}/matches`;
